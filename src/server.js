@@ -5,6 +5,7 @@ const { WebSocketServer, WebSocket } = require("ws");
 const os = require("os");
 const cfg = require("./config");
 const clip = require("./clipboard");
+const db = require("./db");
 
 // ── State ────────────────────────────────────────────────────────────────────
 let lastHash = clip.hash(clip.read());
@@ -17,10 +18,7 @@ let syncCount = 0;
 let lastError = null;
 const startedAt = new Date().toISOString();
 
-// ── Clip history — in-memory, max 200 ────────────────────────────────────────
-const history = [];
-const MAX_HISTORY = 200;
-
+// ── Clip history — SQLite backed ─────────────────────────────────────────────
 function addToHistory(text, source) {
   const entry = {
     id: Date.now().toString(36) + Math.random().toString(36).slice(2, 6),
@@ -31,8 +29,7 @@ function addToHistory(text, source) {
     source,
     time: new Date().toISOString(),
   };
-  history.unshift(entry);
-  if (history.length > MAX_HISTORY) history.pop();
+  db.add(entry);
   broadcastToUI({ type: "new-clip", clip: entry });
   return entry;
 }
@@ -69,25 +66,20 @@ app.get("/status", (_req, res) => {
   res.json({
     running: true, name: cfg.name, peer: cfg.peer, peerConnected,
     lastSyncTime, lastDirection, syncCount, clipboardHash: lastHash.slice(0, 12),
-    startedAt, lastError, historyCount: history.length,
+    startedAt, lastError, historyCount: db.count(),
   });
 });
 
 app.get("/api/clips", (req, res) => {
-  const q = (req.query.q || "").trim().toLowerCase();
-  if (q) {
-    const results = history.filter(c => c.text.toLowerCase().includes(q)).slice(0, 50);
-    return res.json({ clips: results, search: true, query: q });
-  }
-  res.json({ clips: history.slice(0, 100) });
+  const q = (req.query.q || "").trim();
+  if (q) return res.json({ clips: db.search(q), search: true, query: q });
+  res.json({ clips: db.all(100) });
 });
 
 app.delete("/api/clips/:id", (req, res) => {
-  const idx = history.findIndex(c => c.id === req.params.id);
-  if (idx === -1) return res.json({ ok: false });
-  history.splice(idx, 1);
-  broadcastToUI({ type: "delete", id: req.params.id });
-  res.json({ ok: true });
+  const ok = db.remove(req.params.id);
+  if (ok) broadcastToUI({ type: "delete", id: req.params.id });
+  res.json({ ok });
 });
 
 app.get("/api/qr", (_req, res) => {
