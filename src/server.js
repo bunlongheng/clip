@@ -82,6 +82,14 @@ app.get("/api/clips", (req, res) => {
   res.json({ clips: history.slice(0, 100) });
 });
 
+app.delete("/api/clips/:id", (req, res) => {
+  const idx = history.findIndex(c => c.id === req.params.id);
+  if (idx === -1) return res.json({ ok: false });
+  history.splice(idx, 1);
+  broadcastToUI({ type: "delete", id: req.params.id });
+  res.json({ ok: true });
+});
+
 app.get("/api/qr", (_req, res) => {
   const ip = getLanIp();
   res.json({ url: `http://${ip}:${cfg.port}`, ip, port: cfg.port });
@@ -261,6 +269,9 @@ body{font-family:-apple-system,system-ui,sans-serif;background:#020203;color:#e5
 .clip .text mark{background:rgba(250,204,21,.25);color:#fde047;border-radius:2px;padding:0 1px}
 .clip .len{font-size:9px;color:rgba(255,255,255,.15);margin-top:4px}
 .clip.copied{border-color:rgba(34,197,94,.5)!important;box-shadow:0 0 12px rgba(34,197,94,.15)!important}
+.del-btn{background:none;border:none;color:rgba(255,255,255,.15);cursor:pointer;font-size:12px;font-weight:bold;width:18px;height:18px;border-radius:50%;display:flex;align-items:center;justify-content:center;transition:all .15s;opacity:0}
+.clip:hover .del-btn{opacity:1}
+.del-btn:hover{background:rgba(239,68,68,.2);color:#f87171}
 
 /* Empty */
 .empty{text-align:center;padding:60px 20px;color:rgba(255,255,255,.15)}
@@ -336,6 +347,13 @@ function connectUI() {
       flash(); confetti(); playClick();
       document.getElementById('sClips').textContent = clips.length;
     }
+    if (msg.type === 'delete') {
+      const idx = clips.findIndex(c => c.id === msg.id);
+      if (idx !== -1) clips.splice(idx, 1);
+      const el = document.getElementById('c-' + msg.id);
+      if (el) { el.style.opacity='0'; el.style.transform='translateX(-20px)'; setTimeout(() => { el.remove(); if (!clips.length) document.getElementById('emptyState').style.display='block'; }, 200); }
+      document.getElementById('sClips').textContent = clips.length;
+    }
     if (msg.type === 'peer') {
       document.getElementById('peerDot').className = 'dot ' + (msg.connected ? 'on' : 'off');
     }
@@ -370,7 +388,7 @@ function render(newId) {
 
   list.innerHTML = items.slice(0, 100).map(c => {
     const preview = searchQuery ? highlight(esc(c.preview), searchQuery) : esc(c.preview);
-    return '<div class="clip' + (c.id === newId ? ' new' : '') + '" id="c-' + c.id + '" onclick="copyClip(this,\\''+c.id+'\\')"><div class="meta"><span class="source">' + esc(c.source) + '</span><span class="time">' + ago(c.time) + '</span></div><div class="text">' + preview + '</div><div class="len">' + c.length + ' chars</div></div>';
+    return '<div class="clip' + (c.id === newId ? ' new' : '') + '" id="c-' + c.id + '" onclick="copyClip(this,\\''+c.id+'\\')"><div class="meta"><span class="source">' + esc(c.source) + '</span><div style="display:flex;align-items:center;gap:6px"><span class="time">' + ago(c.time) + '</span><button class="del-btn" onclick="event.stopPropagation();delClip(\\''+c.id+'\\')">x</button></div></div><div class="text">' + preview + '</div><div class="len">' + c.length + ' chars</div></div>';
   }).join('');
 }
 
@@ -402,6 +420,11 @@ async function copyClip(el, id) {
   } catch {
     toast('Copy failed', '#dc2626');
   }
+}
+
+// ── Delete ──
+async function delClip(id) {
+  try { await fetch('/api/clips/' + id, { method: 'DELETE' }); } catch {}
 }
 
 // ── Search ──
