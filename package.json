@@ -8,6 +8,7 @@
     "status": "curl -s http://localhost:4545/status | python3 -m json.tool"
   },
   "dependencies": {
+    "better-sqlite3": "^12.9.0",
     "express": "^4.21.0",
     "ws": "^8.18.0"
   }
