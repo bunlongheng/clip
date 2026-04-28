@@ -82,6 +82,19 @@ app.delete("/api/clips/:id", (req, res) => {
   res.json({ ok });
 });
 
+app.get("/manifest.json", (_req, res) => {
+  res.json({
+    name: "Clip", short_name: "Clip",
+    start_url: "/", display: "standalone",
+    background_color: "#020203", theme_color: "#020203",
+    icons: [{ src: "/icon.svg", sizes: "any", type: "image/svg+xml" }],
+  });
+});
+
+app.get("/icon.svg", (_req, res) => {
+  res.type("image/svg+xml").send(`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128"><rect width="128" height="128" rx="28" fill="#0f172a"/><rect x="30" y="28" width="42" height="52" rx="6" fill="none" stroke="#fff" stroke-width="4" opacity=".6"/><rect x="56" y="48" width="42" height="52" rx="6" fill="none" stroke="#3b82f6" stroke-width="4"/><path d="M72 60 L72 88" stroke="#3b82f6" stroke-width="3" stroke-linecap="round" opacity=".5"/><path d="M60 74 L84 74" stroke="#3b82f6" stroke-width="3" stroke-linecap="round" opacity=".5"/></svg>`);
+});
+
 app.get("/api/qr", (_req, res) => {
   const ip = getLanIp();
   res.json({ url: `http://${ip}:${cfg.port}`, ip, port: cfg.port });
@@ -210,6 +223,11 @@ function buildHTML() {
   return `<!DOCTYPE html>
 <html lang="en"><head>
 <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="Clip">
+<meta name="theme-color" content="#020203">
+<link rel="manifest" href="/manifest.json">
 <title>Clip</title>
 <style>
 *{margin:0;padding:0;box-sizing:border-box}
