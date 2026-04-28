@@ -249,13 +249,25 @@ body{font-family:-apple-system,system-ui,sans-serif;background:#020203;color:#e5
 .search .clear{position:absolute;right:10px;top:50%;transform:translateY(-50%);background:none;border:none;color:rgba(255,255,255,.3);cursor:pointer;font-size:14px}
 .search .clear:hover{color:#fff}
 
+/* Machine filter pills */
+.filters{display:flex;gap:6px;margin-bottom:14px}
+.filter-pill{display:flex;align-items:center;gap:5px;padding:5px 12px;border-radius:20px;border:1px solid rgba(255,255,255,.1);background:rgba(255,255,255,.04);color:rgba(255,255,255,.45);font-size:11px;font-weight:600;cursor:pointer;transition:all .15s}
+.filter-pill:hover{background:rgba(255,255,255,.08);color:rgba(255,255,255,.7)}
+.filter-pill.active{background:rgba(255,255,255,.1);color:#fff;border-color:rgba(255,255,255,.25)}
+.filter-pill .icon{width:16px;height:14px;opacity:.5}
+.filter-pill.active .icon{opacity:.9}
+
 /* Clip list */
 .list{display:flex;flex-direction:column;gap:2px}
-.clip{padding:10px 12px;border-radius:10px;background:rgba(255,255,255,.03);border:1px solid transparent;cursor:pointer;transition:all .15s;animation:fadeInUp .3s ease}
-.clip:hover{background:rgba(255,255,255,.06);border-color:rgba(255,255,255,.06)}
+.clip{padding:10px 12px;border-radius:10px;background:rgba(255,255,255,.03);border:1px solid transparent;border-left:3px solid transparent;cursor:pointer;transition:all .15s;animation:fadeInUp .3s ease}
+.clip.m-local{border-left-color:rgba(255,255,255,.5)}
+.clip.m-peer{border-left-color:rgba(59,130,246,.5)}
+.clip:hover{background:rgba(255,255,255,.06)}
 .clip.new{border-color:rgba(37,99,235,.5);box-shadow:0 0 16px rgba(37,99,235,.15);animation:slideIn .4s ease}
 .clip .meta{display:flex;align-items:center;justify-content:space-between;margin-bottom:4px}
-.clip .source{font-size:10px;font-weight:600;color:rgba(59,130,246,.7);text-transform:uppercase;letter-spacing:.05em}
+.clip .source{font-size:10px;font-weight:600;text-transform:uppercase;letter-spacing:.05em;display:flex;align-items:center;gap:4px}
+.clip .source.local{color:rgba(255,255,255,.55)}
+.clip .source.peer{color:rgba(59,130,246,.7)}
 .clip .time{font-size:9px;color:rgba(255,255,255,.2)}
 .clip .text{font-size:12px;color:rgba(255,255,255,.55);line-height:1.5;word-break:break-all;display:-webkit-box;-webkit-line-clamp:3;-webkit-box-orient:vertical;overflow:hidden}
 .clip .text mark{background:rgba(250,204,21,.25);color:#fde047;border-radius:2px;padding:0 1px}
@@ -307,10 +319,20 @@ body{font-family:-apple-system,system-ui,sans-serif;background:#020203;color:#e5
   </div>
 
   <div class="status" id="statusBar">
-    <span>Machine: <span class="val" id="sMachine">${cfg.name}</span></span>
-    <span>Peer: <span class="val" id="sPeer">${cfg.peer || "none"}</span></span>
     <span>Syncs: <span class="val" id="sSyncs">0</span></span>
     <span>Clips: <span class="val" id="sClips">0</span></span>
+  </div>
+
+  <div class="filters" id="filters">
+    <button class="filter-pill active" onclick="setFilter('all')" id="fAll">All</button>
+    <button class="filter-pill" onclick="setFilter('${cfg.name}')" id="fLocal">
+      <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="2" y="3" width="20" height="14" rx="2"/><path d="M8 21h8M12 17v4"/></svg>
+      ${cfg.name}
+    </button>
+    <button class="filter-pill" onclick="setFilter('peer')" id="fPeer">
+      <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="2" y="3" width="20" height="14" rx="2"/><path d="M8 21h8M12 17v4"/></svg>
+      <span id="peerName">${cfg.peer ? cfg.peer.split(':')[0] : 'Peer'}</span>
+    </button>
   </div>
 
   <div id="clipList" class="list"></div>
@@ -326,6 +348,8 @@ body{font-family:-apple-system,system-ui,sans-serif;background:#020203;color:#e5
 const clips = [];
 let searchQuery = '';
 let searchTimer = null;
+let filterMachine = 'all';
+const LOCAL_NAME = '${cfg.name}';
 
 // ── WebSocket ──
 function connectUI() {
@@ -374,14 +398,30 @@ async function loadClips() {
 function render(newId) {
   const list = document.getElementById('clipList');
   const empty = document.getElementById('emptyState');
-  const items = searchQuery ? clips.filter(c => c.text.toLowerCase().includes(searchQuery.toLowerCase())) : clips;
+  let items = clips;
+  if (searchQuery) items = items.filter(c => c.text.toLowerCase().includes(searchQuery.toLowerCase()));
+  if (filterMachine === LOCAL_NAME) items = items.filter(c => c.source === LOCAL_NAME);
+  else if (filterMachine === 'peer') items = items.filter(c => c.source !== LOCAL_NAME);
 
   empty.style.display = items.length ? 'none' : 'block';
 
+  const laptopIcon = '<svg style="width:12px;height:10px;opacity:.5;flex-shrink:0" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="2" y="3" width="20" height="14" rx="2"/><path d="M8 21h8M12 17v4"/></svg>';
   list.innerHTML = items.slice(0, 100).map(c => {
+    const isLocal = c.source === LOCAL_NAME;
+    const mClass = isLocal ? 'm-local' : 'm-peer';
+    const sClass = isLocal ? 'local' : 'peer';
     const preview = searchQuery ? highlight(esc(c.preview), searchQuery) : esc(c.preview);
-    return '<div class="clip' + (c.id === newId ? ' new' : '') + '" id="c-' + c.id + '" onclick="copyClip(this,\\''+c.id+'\\')"><div class="meta"><span class="source">' + esc(c.source) + '</span><div style="display:flex;align-items:center;gap:6px"><span class="time">' + ago(c.time) + '</span><button class="del-btn" onclick="event.stopPropagation();delClip(\\''+c.id+'\\')">x</button></div></div><div class="text">' + preview + '</div><div class="len">' + c.length + ' chars</div></div>';
+    return '<div class="clip ' + mClass + (c.id === newId ? ' new' : '') + '" id="c-' + c.id + '" onclick="copyClip(this,\\''+c.id+'\\')"><div class="meta"><span class="source ' + sClass + '">' + laptopIcon + ' ' + esc(c.source) + '</span><div style="display:flex;align-items:center;gap:6px"><span class="time">' + ago(c.time) + '</span><button class="del-btn" onclick="event.stopPropagation();delClip(\\''+c.id+'\\')">x</button></div></div><div class="text">' + preview + '</div><div class="len">' + c.length + ' chars</div></div>';
   }).join('');
+}
+
+function setFilter(f) {
+  filterMachine = f;
+  document.querySelectorAll('.filter-pill').forEach(p => p.classList.remove('active'));
+  if (f === 'all') document.getElementById('fAll').classList.add('active');
+  else if (f === LOCAL_NAME) document.getElementById('fLocal').classList.add('active');
+  else document.getElementById('fPeer').classList.add('active');
+  render();
 }
 
 function highlight(html, q) {
