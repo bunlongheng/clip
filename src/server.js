@@ -20,7 +20,11 @@ const startedAt = new Date().toISOString();
 
 // ── Clip history — SQLite backed ─────────────────────────────────────────────
 function addToHistory(text, source) {
-  const trimmed = text.trim();
+  // Trim overall + dedent: find min leading spaces across lines and remove
+  const lines = text.trim().split('\n');
+  const nonEmpty = lines.filter(l => l.trim().length > 0);
+  const minIndent = nonEmpty.length ? Math.min(...nonEmpty.map(l => l.match(/^(\s*)/)[0].length)) : 0;
+  const trimmed = (minIndent > 0 ? lines.map(l => l.slice(minIndent)) : lines).join('\n').trim();
   const h = clip.hash(trimmed).slice(0, 12);
 
   // Dedup: if same content exists, move it to top by updating time
@@ -289,19 +293,19 @@ body{font-family:'Inter',-apple-system,system-ui,sans-serif;background:#020203;c
 
 /* Clip list */
 .list{display:flex;flex-direction:column;gap:2px}
-.clip{padding:10px 12px 20px;border-radius:12px;background:linear-gradient(135deg,rgba(255,255,255,.06) 0%,rgba(255,255,255,.02) 100%);backdrop-filter:blur(8px);border:1px solid transparent;cursor:pointer;transition:all .15s;animation:fadeInUp .3s ease;box-shadow:inset 0 1px 0 rgba(255,255,255,.06),0 2px 8px rgba(0,0,0,.3)}
+.clip{padding:12px 12px;border-radius:12px;display:flex;align-items:center;min-height:48px;background:linear-gradient(135deg,rgba(59,130,246,.08) 0%,rgba(139,92,246,.06) 50%,rgba(255,255,255,.02) 100%);backdrop-filter:blur(10px);border:1px solid transparent;cursor:pointer;transition:all .15s;animation:fadeInUp .3s ease;box-shadow:inset 0 1px 0 rgba(139,92,246,.08),0 2px 12px rgba(59,130,246,.08),0 4px 20px rgba(0,0,0,.25)}
 .clip.m-local{border-color:rgba(255,255,255,.15)}
 .clip.m-peer{border-color:rgba(59,130,246,.25)}
-.clip:hover{background:linear-gradient(135deg,rgba(255,255,255,.1) 0%,rgba(255,255,255,.04) 100%);box-shadow:inset 0 1px 0 rgba(255,255,255,.1),0 4px 16px rgba(0,0,0,.4)}
+.clip:hover{background:linear-gradient(135deg,rgba(59,130,246,.14) 0%,rgba(139,92,246,.1) 50%,rgba(255,255,255,.04) 100%);box-shadow:inset 0 1px 0 rgba(139,92,246,.12),0 4px 20px rgba(59,130,246,.15),0 8px 30px rgba(0,0,0,.3)}
 @keyframes blink5{0%,20%,40%,60%,80%,100%{border-color:rgba(37,99,235,.5);box-shadow:0 0 16px rgba(37,99,235,.2)}10%,30%,50%,70%,90%{border-color:transparent;box-shadow:none}}
 .clip.new{animation:slideIn .4s ease,blink5 2.5s ease}
-.clip .meta{display:flex;align-items:center;justify-content:space-between;margin-bottom:4px}
+.clip .meta{display:flex;align-items:center;justify-content:flex-end;position:absolute;top:8px;right:8px;z-index:1}
 .clip .source{font-size:10px;font-weight:600;text-transform:uppercase;letter-spacing:.05em;display:flex;align-items:center;gap:4px}
 .clip .source.local{color:rgba(255,255,255,.55)}
 .clip .source.peer{color:rgba(59,130,246,.7)}
 .clip{position:relative}
 .clip .time{font-size:8px;color:rgba(255,255,255,.18);position:absolute;bottom:6px;right:10px}
-.clip .text{font-size:10px;color:rgba(255,255,255,.55);line-height:1.5;word-break:break-all;white-space:nowrap;font-family:'JetBrains Mono',ui-monospace,monospace;overflow:hidden;text-overflow:ellipsis}
+.clip .text{font-size:10px;color:rgba(255,255,255,.55);line-height:1.5;word-break:break-all;white-space:nowrap;font-family:'JetBrains Mono',ui-monospace,monospace;overflow:hidden;text-overflow:ellipsis;flex:1;padding-right:60px}
 .clip .text mark{background:rgba(250,204,21,.25);color:#fde047;border-radius:2px;padding:0 1px}
 .clip.copied{border-color:rgba(34,197,94,.5)!important;box-shadow:0 0 12px rgba(34,197,94,.15)!important}
 .clip-actions{display:flex;gap:4px;opacity:0;transition:opacity .15s}
@@ -395,7 +399,9 @@ body{font-family:'Inter',-apple-system,system-ui,sans-serif;background:#020203;c
     <div class="clip-modal-header"><span class="source" id="modalSource"></span><span class="time" id="modalTime"></span></div>
     <div class="clip-modal-body"><pre id="modalText"></pre></div>
     <div class="clip-modal-footer">
+      <button class="modal-btn" id="modalOpen" style="display:none;background:rgba(34,197,94,.15);color:#4ade80;border:1px solid rgba(34,197,94,.25);flex:0.5"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6M15 3h6v6M10 14L21 3"/></svg></button>
       <button class="modal-btn copy" onclick="modalCopy()"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>Copy</button>
+      <button class="modal-btn" id="modalHeart" onclick="toggleModalHeart()" style="background:rgba(244,114,182,.1);color:#f472b6;border:1px solid rgba(244,114,182,.2);flex:0.5"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z"/></svg></button>
       <button class="modal-btn close" onclick="closeModal()">Close</button>
     </div>
   </div>
@@ -482,7 +488,7 @@ function render(newId) {
     const mClass = isLocal ? 'm-local' : 'm-peer';
     const sClass = isLocal ? 'local' : 'peer';
     const preview = searchQuery ? highlight(esc(c.preview), searchQuery) : esc(c.preview);
-    return '<div class="clip ' + mClass + (c.id === newId ? ' new' : '') + '" id="c-' + c.id + '" onclick="openModal(\\''+c.id+'\\')"><div class="meta"><span class="source ' + sClass + '">' + laptopIcon + ' ' + esc(c.source) + '</span><div style="display:flex;align-items:center;gap:6px"><span class="time">' + ago(c.time) + '</span><div class="clip-actions"><button class="act-btn" onclick="event.stopPropagation();quickCopy(\\''+c.id+'\\',this)" title="Copy"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg></button><button class="act-btn heart" onclick="event.stopPropagation();toggleHeart(this)" title="Favorite"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z"/></svg></button><button class="act-btn del" onclick="event.stopPropagation();delClip(\\''+c.id+'\\',this)" title="Delete"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 6h18M8 6V4h8v2M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6"/></svg></button></div></div></div><div class="text">' + preview + '</div></div>';
+    return '<div class="clip ' + mClass + (c.id === newId ? ' new' : '') + '" id="c-' + c.id + '" onclick="openModal(\\''+c.id+'\\')"><div class="meta"><div class="clip-actions"><button class="act-btn" onclick="event.stopPropagation();quickCopy(\\''+c.id+'\\',this)" title="Copy"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg></button><button class="act-btn del" onclick="event.stopPropagation();delClip(\\''+c.id+'\\',this)" title="Delete"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 6h18M8 6V4h8v2M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6"/></svg></button></div></div><div class="text">' + preview + '</div></div>';
   }).join('');
 
   // Pagination
@@ -504,6 +510,11 @@ function openModal(id) {
   document.getElementById('modalTime').textContent = ago(c.time);
   document.getElementById('modalText').textContent = c.text;
   document.getElementById('modalText').style.fontFamily = "'JetBrains Mono',ui-monospace,monospace";
+  // Show Open button if text is a URL
+  const openBtn = document.getElementById('modalOpen');
+  const isUrl = /^https?:\\/\\//i.test(c.text.trim());
+  openBtn.style.display = isUrl ? 'flex' : 'none';
+  openBtn.onclick = () => window.open(c.text.trim(), '_blank');
   document.getElementById('clipModal').classList.add('show');
 }
 
@@ -560,14 +571,17 @@ async function quickCopy(id) {
   try { await navigator.clipboard.writeText(c.text); toast('Copied', 'green'); } catch { toast('Failed', 'red'); }
 }
 
-function toggleHeart(btn) {
-  btn.classList.toggle('liked');
-  const fill = btn.classList.contains('liked') ? 'currentColor' : 'none';
-  btn.querySelector('svg path').setAttribute('fill', fill);
+let modalHearted = false;
+function toggleModalHeart() {
+  modalHearted = !modalHearted;
+  const btn = document.getElementById('modalHeart');
+  btn.querySelector('svg path').setAttribute('fill', modalHearted ? 'currentColor' : 'none');
+  btn.style.background = modalHearted ? 'rgba(244,114,182,.25)' : 'rgba(244,114,182,.1)';
+  toast(modalHearted ? 'Favorited' : 'Unfavorited', '#ec4899');
 }
 
 async function delClip(id) {
-  try { await fetch('/api/clips/' + id, { method: 'DELETE' }); } catch {}
+  try { await fetch('/api/clips/' + id, { method: 'DELETE' }); toast('Deleted', 'red'); } catch {}
 }
 
 // ── Search ──
