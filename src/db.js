@@ -50,4 +50,16 @@ function count() {
   return stmts.count.get().total;
 }
 
-module.exports = { add, all, search, remove, count };
+function dedup() {
+  const seen = new Set();
+  const dupes = [];
+  const rows = stmts.all.all(9999);
+  for (const r of rows) {
+    if (seen.has(r.hash)) dupes.push(r.id);
+    else seen.add(r.hash);
+  }
+  for (const id of dupes) stmts.delete.run(id);
+  return dupes.length;
+}
+
+module.exports = { add, all, search, remove, count, dedup };
