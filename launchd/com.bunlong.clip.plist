@@ -16,7 +16,7 @@
         <key>CLIP_NAME</key>
         <string>M4</string>
         <key>CLIP_PEER</key>
-        <string></string>
+        <string>10.0.0.97:4545</string>
         <key>CLIP_TOKEN</key>
         <string>clip-sync-secret</string>
     </dict>

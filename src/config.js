@@ -10,7 +10,7 @@ module.exports = {
 
   // Peer machine address — the other computer's IP:port
   // e.g. "10.0.0.218:4545" or "macmini.local:4545"
-  peer: process.env.CLIP_PEER || "",
+  peer: process.env.CLIP_PEER || "10.0.0.97:4545",
 
   // Shared secret — must match on both machines
   token: process.env.CLIP_TOKEN || "clip-sync-secret",
