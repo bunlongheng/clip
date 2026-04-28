@@ -1,0 +1,14 @@
+{
+  "name": "clip",
+  "version": "1.0.0",
+  "description": "Tiny clipboard sync daemon for macOS",
+  "main": "src/server.js",
+  "scripts": {
+    "start": "node src/server.js",
+    "status": "curl -s http://localhost:4545/status | python3 -m json.tool"
+  },
+  "dependencies": {
+    "express": "^4.21.0",
+    "ws": "^8.18.0"
+  }
+}
