@@ -413,7 +413,7 @@ const clips = [];
 let searchQuery = '';
 let searchTimer = null;
 const LOCAL_NAME = '${cfg.name}';
-const PAGE_SIZE = 25;
+const PAGE_SIZE = 15;
 let currentPage = 1;
 let modalClipId = null;
 
