@@ -399,10 +399,10 @@ body{font-family:'Inter',-apple-system,system-ui,sans-serif;background:#020203;c
     <div class="clip-modal-header"><span class="source" id="modalSource"></span><span class="time" id="modalTime"></span></div>
     <div class="clip-modal-body"><pre id="modalText"></pre></div>
     <div class="clip-modal-footer">
-      <button class="modal-btn" id="modalOpen" style="display:none;background:rgba(34,197,94,.15);color:#4ade80;border:1px solid rgba(34,197,94,.25);flex:0.5"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6M15 3h6v6M10 14L21 3"/></svg></button>
-      <button class="modal-btn copy" onclick="modalCopy()"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>Copy</button>
-      <button class="modal-btn" id="modalHeart" onclick="toggleModalHeart()" style="background:rgba(244,114,182,.1);color:#f472b6;border:1px solid rgba(244,114,182,.2);flex:0.5"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z"/></svg></button>
-      <button class="modal-btn close" onclick="closeModal()">Close</button>
+      <button class="modal-btn" id="modalOpen" title="Open link" style="display:none;background:rgba(34,197,94,.15);color:#4ade80;border:1px solid rgba(34,197,94,.25)"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6M15 3h6v6M10 14L21 3"/></svg></button>
+      <button class="modal-btn copy" onclick="modalCopy()" title="Copy"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg></button>
+      <button class="modal-btn" id="modalHeart" onclick="toggleModalHeart()" title="Favorite" style="background:rgba(244,114,182,.1);color:#f472b6;border:1px solid rgba(244,114,182,.2)"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z"/></svg></button>
+      <button class="modal-btn close" onclick="closeModal()" title="Close"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 6L6 18M6 6l12 12"/></svg></button>
     </div>
   </div>
 </div>
