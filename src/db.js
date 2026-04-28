@@ -24,6 +24,7 @@ const stmts = {
   all: db.prepare(`SELECT * FROM clips ORDER BY time DESC LIMIT ?`),
   search: db.prepare(`SELECT * FROM clips WHERE text LIKE ? ORDER BY time DESC LIMIT ?`),
   delete: db.prepare(`DELETE FROM clips WHERE id = ?`),
+  update: db.prepare(`UPDATE clips SET text = ?, preview = ?, length = ? WHERE id = ?`),
   count: db.prepare(`SELECT COUNT(*) as total FROM clips`),
   prune: db.prepare(`DELETE FROM clips WHERE id NOT IN (SELECT id FROM clips ORDER BY time DESC LIMIT ?)`),
 };
@@ -50,6 +51,10 @@ function count() {
   return stmts.count.get().total;
 }
 
+function update(id, text) {
+  return stmts.update.run(text, text.slice(0, 2000), text.length, id).changes > 0;
+}
+
 function dedup() {
   const seen = new Set();
   const dupes = [];
@@ -62,4 +67,4 @@ function dedup() {
   return dupes.length;
 }
 
-module.exports = { add, all, search, remove, count, dedup };
+module.exports = { add, all, search, remove, update, count, dedup };

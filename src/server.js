@@ -94,6 +94,17 @@ app.get("/api/clips", (req, res) => {
   res.json({ clips: db.all(100) });
 });
 
+app.put("/api/clips/:id", (req, res) => {
+  const { text } = req.body;
+  if (!text || !text.trim()) return res.json({ ok: false });
+  const ok = db.update(req.params.id, text.trim());
+  if (ok) {
+    const idx = history ? 0 : 0; // just update in-memory via reload
+    broadcastToUI({ type: "updated", id: req.params.id, text: text.trim() });
+  }
+  res.json({ ok });
+});
+
 app.delete("/api/clips/:id", (req, res) => {
   const ok = db.remove(req.params.id);
   if (ok) broadcastToUI({ type: "delete", id: req.params.id });
@@ -335,9 +346,12 @@ body{font-family:'Inter',-apple-system,system-ui,sans-serif;background:#020203;c
 /* QR modal */
 .qr-overlay{display:none;position:fixed;inset:0;z-index:9998;background:rgba(0,0,0,.88);backdrop-filter:blur(12px);align-items:center;justify-content:center;flex-direction:column;gap:16px}
 .qr-overlay.show{display:flex}
-.qr-overlay img{width:220px;height:220px;background:rgba(255,255,255,.1);padding:16px;border-radius:22px;box-shadow:0 0 60px rgba(255,255,255,.1)}
+.qr-overlay img{width:220px;height:220px;background:#fff;padding:20px;border-radius:24px;box-shadow:0 0 80px rgba(255,255,255,.2),0 0 160px rgba(255,255,255,.08)}
+.qr-overlay .url-row{display:flex;align-items:center;gap:8px;margin-top:4px}
 .qr-overlay p{font-size:12px;color:rgba(255,255,255,.45);font-family:monospace;background:rgba(255,255,255,.06);padding:6px 14px;border-radius:8px}
-.qr-overlay small{font-size:10px;color:rgba(255,255,255,.25);cursor:pointer}
+.qr-overlay .copy-url{width:32px;height:32px;border-radius:8px;border:1px solid rgba(255,255,255,.15);background:rgba(255,255,255,.06);color:rgba(255,255,255,.5);cursor:pointer;display:flex;align-items:center;justify-content:center;transition:all .15s}
+.qr-overlay .copy-url:hover{background:rgba(255,255,255,.15);color:#fff}
+.qr-overlay small{font-size:10px;color:rgba(255,255,255,.25);cursor:pointer;margin-top:4px}
 
 /* Clip modal */
 .clip-modal{display:none;position:fixed;inset:0;z-index:9997;background:rgba(0,0,0,.85);backdrop-filter:blur(8px);align-items:center;justify-content:center;padding:20px}
@@ -347,7 +361,7 @@ body{font-family:'Inter',-apple-system,system-ui,sans-serif;background:#020203;c
 .clip-modal-header .source{font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:.05em;display:flex;align-items:center;gap:5px}
 .clip-modal-header .time{font-size:10px;color:rgba(255,255,255,.25)}
 .clip-modal-body{padding:16px;overflow-y:auto;flex:1}
-.clip-modal-body pre{font-size:9px;color:rgba(255,255,255,.7);line-height:1.6;white-space:pre-wrap;word-break:break-all;font-family:'JetBrains Mono',ui-monospace,monospace;margin:0}
+.clip-modal-body textarea{font-size:9px;color:rgba(255,255,255,.7);line-height:1.6;white-space:pre-wrap;word-break:break-all;font-family:'JetBrains Mono',ui-monospace,monospace;margin:0;width:100%;min-height:120px;background:transparent;border:none;outline:none;resize:vertical}
 .clip-modal-footer{display:flex;gap:8px;padding:12px 16px;border-top:1px solid rgba(255,255,255,.06)}
 .modal-btn{flex:1;padding:8px;border-radius:8px;border:none;font-size:12px;font-weight:600;cursor:pointer;transition:all .15s;display:flex;align-items:center;justify-content:center;gap:5px}
 .modal-btn.copy{background:rgba(59,130,246,.2);color:#60a5fa;border:1px solid rgba(59,130,246,.3)}
@@ -360,7 +374,10 @@ body{font-family:'Inter',-apple-system,system-ui,sans-serif;background:#020203;c
 <canvas id="confetti"></canvas>
 <div class="qr-overlay" id="qrOverlay" onclick="this.classList.remove('show')">
   <img id="qrImg" src="" alt="QR">
-  <p id="qrUrl"></p>
+  <div class="url-row">
+    <p id="qrUrl"></p>
+    <button class="copy-url" onclick="event.stopPropagation();navigator.clipboard.writeText(document.getElementById('qrUrl').textContent).then(()=>toast('URL copied','green'))" title="Copy URL"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg></button>
+  </div>
   <small>tap anywhere to close</small>
 </div>
 <div class="root">
@@ -397,9 +414,10 @@ body{font-family:'Inter',-apple-system,system-ui,sans-serif;background:#020203;c
 <div class="clip-modal" id="clipModal" onclick="closeModal()">
   <div class="clip-modal-inner" onclick="event.stopPropagation()">
     <div class="clip-modal-header"><span class="source" id="modalSource"></span><span class="time" id="modalTime"></span></div>
-    <div class="clip-modal-body"><pre id="modalText"></pre></div>
+    <div class="clip-modal-body"><textarea id="modalText"></textarea></div>
     <div class="clip-modal-footer">
       <button class="modal-btn" id="modalOpen" title="Open link" style="display:none;background:rgba(34,197,94,.15);color:#4ade80;border:1px solid rgba(34,197,94,.25)"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6M15 3h6v6M10 14L21 3"/></svg></button>
+      <button class="modal-btn" onclick="modalSave()" title="Save edits" style="background:rgba(139,92,246,.15);color:#a78bfa;border:1px solid rgba(139,92,246,.25)"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/><path d="M17 21v-8H7v8M7 3v5h8"/></svg></button>
       <button class="modal-btn copy" onclick="modalCopy()" title="Copy"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg></button>
       <button class="modal-btn" id="modalHeart" onclick="toggleModalHeart()" title="Favorite" style="background:rgba(244,114,182,.1);color:#f472b6;border:1px solid rgba(244,114,182,.2)"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z"/></svg></button>
       <button class="modal-btn close" onclick="closeModal()" title="Close"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 6L6 18M6 6l12 12"/></svg></button>
@@ -436,6 +454,10 @@ function connectUI() {
       currentPage = 1;
       render(msg.clip.id);
       flash(); playClick();
+    }
+    if (msg.type === 'updated') {
+      const c = clips.find(x => x.id === msg.id);
+      if (c) { c.text = msg.text; c.preview = msg.text.slice(0,2000); render(); }
     }
     if (msg.type === 'delete') {
       const idx = clips.findIndex(c => c.id === msg.id);
@@ -508,8 +530,7 @@ function openModal(id) {
   document.getElementById('modalSource').innerHTML = '<svg style="width:12px;height:10px;opacity:.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="2" y="3" width="20" height="14" rx="2"/><path d="M8 21h8M12 17v4"/></svg> ' + esc(c.source);
   document.getElementById('modalSource').style.color = isLocal ? 'rgba(255,255,255,.55)' : 'rgba(59,130,246,.7)';
   document.getElementById('modalTime').textContent = ago(c.time);
-  document.getElementById('modalText').textContent = c.text;
-  document.getElementById('modalText').style.fontFamily = "'JetBrains Mono',ui-monospace,monospace";
+  document.getElementById('modalText').value = c.text;
   // Show Open button if text is a URL
   const openBtn = document.getElementById('modalOpen');
   const isUrl = /^https?:\\/\\//i.test(c.text.trim());
@@ -524,13 +545,24 @@ function closeModal() {
 }
 
 async function modalCopy() {
-  const c = clips.find(x => x.id === modalClipId);
-  if (!c) return;
+  const text = document.getElementById('modalText').value;
   try {
-    await navigator.clipboard.writeText(c.text);
+    await navigator.clipboard.writeText(text);
     toast('Copied', 'green');
     closeModal();
   } catch { toast('Copy failed', 'red'); }
+}
+
+async function modalSave() {
+  const text = document.getElementById('modalText').value;
+  if (!text.trim()) return;
+  try {
+    await fetch('/api/clips/' + modalClipId, { method: 'PUT', headers: {'Content-Type':'application/json'}, body: JSON.stringify({ text }) });
+    const c = clips.find(x => x.id === modalClipId);
+    if (c) { c.text = text.trim(); c.preview = text.trim().slice(0,2000); }
+    render();
+    toast('Saved', 'blue');
+  } catch { toast('Save failed', 'red'); }
 }
 
 
