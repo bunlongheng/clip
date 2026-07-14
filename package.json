@@ -5,11 +5,22 @@
   "main": "src/server.js",
   "scripts": {
     "start": "node src/server.js",
-    "status": "curl -s http://localhost:4545/status | python3 -m json.tool"
+    "status": "curl -s http://localhost:4545/status | python3 -m json.tool",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "test:coverage": "vitest run --coverage",
+    "test:e2e": "playwright test",
+    "test:all": "vitest run && playwright test"
   },
   "dependencies": {
     "better-sqlite3": "^12.9.0",
     "express": "^4.21.0",
     "ws": "^8.18.0"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.60.0",
+    "@vitest/coverage-v8": "^4.1.7",
+    "msw": "^2.14.6",
+    "vitest": "^4.1.7"
   }
 }

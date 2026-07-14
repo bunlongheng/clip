@@ -4,7 +4,7 @@ const crypto = require("crypto");
 
 function read() {
   try {
-    return execSync("pbpaste", { encoding: "utf8", timeout: 2000 });
+    return execSync("pbpaste", { encoding: "utf8", timeout: 2000, env: { ...process.env, LANG: "en_US.UTF-8" } });
   } catch {
     return "";
   }
@@ -12,7 +12,7 @@ function read() {
 
 function write(text) {
   try {
-    execSync("pbcopy", { input: text, encoding: "utf8", timeout: 2000 });
+    execSync("pbcopy", { input: text, encoding: "utf8", timeout: 2000, env: { ...process.env, LANG: "en_US.UTF-8" } });
   } catch {}
 }
 

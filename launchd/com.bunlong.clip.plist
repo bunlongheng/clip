@@ -7,18 +7,18 @@
 
     <key>ProgramArguments</key>
     <array>
-        <string>/usr/local/bin/node</string>
-        <string>/Users/bheng/Sites/clip/src/server.js</string>
+        <string>/ABSOLUTE/PATH/TO/node</string>
+        <string>/ABSOLUTE/PATH/TO/clip/src/server.js</string>
     </array>
 
     <key>EnvironmentVariables</key>
     <dict>
         <key>CLIP_NAME</key>
-        <string>M4</string>
+        <string>MyMac</string>
         <key>CLIP_PEER</key>
-        <string>10.0.0.97:4545</string>
+        <string>192.168.1.50:4545</string>
         <key>CLIP_TOKEN</key>
-        <string>clip-sync-secret</string>
+        <string>change-this-shared-secret</string>
     </dict>
 
     <key>RunAtLoad</key>

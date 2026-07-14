@@ -7,6 +7,15 @@ const cfg = require("./config");
 const clip = require("./clipboard");
 const db = require("./db");
 
+// ── .env loader — load ../.env into process.env (does not override existing) ──
+try {
+  const envFile = require("fs").readFileSync(require("path").join(__dirname, "..", ".env"), "utf8");
+  for (const line of envFile.split("\n")) {
+    const m = line.match(/^\s*([A-Z0-9_]+)\s*=\s*(.*)\s*$/i);
+    if (m && !(m[1] in process.env)) process.env[m[1]] = m[2].replace(/^["']|["']$/g, "");
+  }
+} catch {}
+
 // ── State ────────────────────────────────────────────────────────────────────
 let lastHash = clip.hash(clip.read());
 let echoUntil = 0;
@@ -19,13 +28,31 @@ let lastError = null;
 const startedAt = new Date().toISOString();
 
 // ── Clip history — SQLite backed ─────────────────────────────────────────────
+let lastAddedHash = '';
+let lastAddedTime = 0;
+const SMASH_COOLDOWN_MS = 1000; // ignore re-copies of same content within 1s
+
 function addToHistory(text, source) {
-  // Trim overall + dedent: find min leading spaces across lines and remove
-  const lines = text.trim().split('\n');
-  const nonEmpty = lines.filter(l => l.trim().length > 0);
-  const minIndent = nonEmpty.length ? Math.min(...nonEmpty.map(l => l.match(/^(\s*)/)[0].length)) : 0;
-  const trimmed = (minIndent > 0 ? lines.map(l => l.slice(minIndent)) : lines).join('\n').trim();
+  // Trim overall + strip leading whitespace from every line
+  const trimmed = text.trim().split('\n').map(l => l.trimStart()).join('\n').trim();
   const h = clip.hash(trimmed).slice(0, 12);
+
+  // Anti-smash: ignore rapid re-copies of same content
+  const now = Date.now();
+  if (h === lastAddedHash && now - lastAddedTime < SMASH_COOLDOWN_MS) return null;
+
+  // Anti-stream: if new text shares first 60 chars with recent clip (growing content),
+  // replace the old one instead of creating a new entry
+  if (lastAddedHash && now - lastAddedTime < SMASH_COOLDOWN_MS) {
+    const recent = db.all(5).find(c => c.hash === lastAddedHash);
+    if (recent && trimmed.slice(0, 60) === recent.text.slice(0, 60)) {
+      db.remove(recent.id);
+      // Fall through to create new entry with updated content
+    }
+  }
+
+  lastAddedHash = h;
+  lastAddedTime = now;
 
   // Dedup: if same content exists, move it to top by updating time
   const existing = db.all(500).find(c => c.hash === h);
@@ -99,7 +126,6 @@ app.put("/api/clips/:id", (req, res) => {
   if (!text || !text.trim()) return res.json({ ok: false });
   const ok = db.update(req.params.id, text.trim());
   if (ok) {
-    const idx = history ? 0 : 0; // just update in-memory via reload
     broadcastToUI({ type: "updated", id: req.params.id, text: text.trim() });
   }
   res.json({ ok });
@@ -111,18 +137,51 @@ app.delete("/api/clips/:id", (req, res) => {
   res.json({ ok });
 });
 
+// Lazily mint a Stickies API key on first use and persist it to ../.env.
+// Stickies authorizes this endpoint via its LAN bypass, so no bootstrap secret.
+async function ensureStickiesToken(base) {
+  if (process.env.STICKIES_API_TOKEN) return process.env.STICKIES_API_TOKEN;
+  const r = await fetch(base + "/api/stickies/keys", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ label: "clip" }),
+  });
+  if (!r.ok) throw new Error("mint failed: " + r.status);
+  const { key } = await r.json();
+  if (!key) throw new Error("mint returned no key");
+  process.env.STICKIES_API_TOKEN = key;
+  const fs = require("fs"), path = require("path");
+  const envPath = path.join(__dirname, "..", ".env");
+  let body = ""; try { body = fs.readFileSync(envPath, "utf8"); } catch {}
+  if (!/^STICKIES_API_TOKEN=/m.test(body)) {
+    fs.writeFileSync(envPath, (body && !body.endsWith("\n") ? body + "\n" : body) + `STICKIES_API_TOKEN=${key}\n`);
+  }
+  return key;
+}
+
 app.post("/api/stickies", async (req, res) => {
   const { text } = req.body;
-  if (!text || !text.trim()) return res.json({ ok: false });
+  const content = (text || "").trim();
+  if (!content) return res.json({ ok: false });
   try {
-    const title = text.trim().slice(0, 40) + (text.length > 40 ? "…" : "");
-    const r = await fetch(process.env.STICKIES_API_URL + "/api/stickies", {
+    const base = (process.env.STICKIES_API_URL || "http://localhost:4444").replace(/\/$/, "");
+    const token = await ensureStickiesToken(base);
+    const firstLine = content.split("\n").find(l => l.trim()) || content;
+    // Title must be emoji-free (Stickies enforces this on its end too).
+    // Strips pictographs, regional-indicator flags, variation selectors, ZWJ and keycap combiner.
+    const title = firstLine
+      .replace(/[\p{Extended_Pictographic}\u{1F1E6}-\u{1F1FF}\u{FE00}-\u{FE0F}\u{200D}\u{20E3}]/gu, "")
+      .replace(/\s{2,}/g, " ")
+      .trim()
+      .slice(0, 60) || "Clip";
+    const r = await fetch(base + "/api/stickies/ext", {
       method: "POST",
-      headers: { "Content-Type": "application/json", "Authorization": "Bearer " + process.env.STICKIES_API_TOKEN },
-      body: JSON.stringify({ title, content: text.trim(), tags: "clip", path: "/Clip" }),
+      headers: { "Content-Type": "application/json", "Authorization": "Bearer " + token },
+      // type:"text" preserves the exact clipboard text; folder lands it under Apps/Clips
+      body: JSON.stringify({ title, content, folder: "Apps/Clips", type: "text" }),
     });
-    const data = await r.json();
-    res.json({ ok: !!data });
+    const data = await r.json().catch(() => ({}));
+    res.json({ ok: r.ok && !!data.note });
   } catch (e) { res.json({ ok: false, error: e.message }); }
 });
 
@@ -142,6 +201,29 @@ app.get("/icon.svg", (_req, res) => {
 app.get("/api/qr", (_req, res) => {
   const ip = getLanIp();
   res.json({ url: `http://${ip}:${cfg.port}`, ip, port: cfg.port });
+});
+
+app.get("/api/setup", (_req, res) => {
+  const ip = getLanIp();
+  const myAddr = `${ip}:${cfg.port}`;
+  res.json({
+    status: peerConnected ? "connected" : "disconnected",
+    thisMachine: { name: cfg.name, ip: myAddr },
+    peer: { addr: cfg.peer, connected: peerConnected },
+    setup: {
+      instructions: `To connect another machine, run clip with CLIP_PEER pointing to this machine:`,
+      command: `cd ~/Sites/clip && CLIP_PEER=${myAddr} CLIP_TOKEN=${cfg.token} npm start`,
+      env: { CLIP_PEER: myAddr, CLIP_TOKEN: cfg.token, CLIP_PORT: cfg.port },
+    },
+  });
+});
+
+app.post("/api/dedup", (_req, res) => {
+  const cleaned = db.cleanup();
+  const deduped = db.dedup();
+  const removed = cleaned + deduped;
+  if (removed > 0) broadcastToUI({ type: "dedup", removed });
+  res.json({ ok: true, removed, cleaned, deduped });
 });
 
 // ── WebSocket server ─────────────────────────────────────────────────────────
@@ -171,7 +253,7 @@ server.on("upgrade", (req, socket, head) => {
       uiClients.add(ws);
       ws.on("close", () => uiClients.delete(ws));
       // Send current state
-      ws.send(JSON.stringify({ type: "state", peerConnected, syncCount, name: cfg.name, peer: cfg.peer }));
+      ws.send(JSON.stringify({ type: "state", peerConnected, syncCount, name: cfg.name, peer: cfg.peer, localIp: getLanIp() + ':' + cfg.port }));
     });
     return;
   }
@@ -287,20 +369,34 @@ body{font-family:'Inter',-apple-system,system-ui,sans-serif;background:#020203;c
 .root{min-height:100vh;background:#020203;transition:background .4s}
 
 /* Flash + confetti */
-@keyframes flashBorder{0%,100%{opacity:0}20%,50%{opacity:1}35%{opacity:0}75%{opacity:1}90%{opacity:0}}
+@keyframes flashBorder{0%{opacity:0}15%{opacity:1}100%{opacity:0}}
 @keyframes fadeInUp{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:translateY(0)}}
 @keyframes slideIn{from{opacity:0;transform:translateX(-12px)}to{opacity:1;transform:translateX(0)}}
+@keyframes slideInNew{0%{opacity:0;transform:translate(40px,40px) scale(.85)}60%{opacity:1;transform:translate(-4px,-4px) scale(1.02)}100%{opacity:1;transform:translate(0,0) scale(1)}}
+@keyframes cardPageIn{0%{opacity:0;transform:scale(.7) translateY(30px) rotate(-3deg)}50%{opacity:1;transform:scale(1.03) translateY(-4px) rotate(0deg)}100%{opacity:1;transform:scale(1) translateY(0) rotate(0deg)}}
+.clip.page-in{animation:cardPageIn .5s cubic-bezier(.34,1.56,.64,1) both}
+@keyframes blink2{0%,100%{border-color:var(--page-color-blink);box-shadow:0 0 16px var(--page-color-blink-glow)}50%{border-color:transparent;box-shadow:none}}
+@keyframes delRed{0%{background:rgba(220,38,38,.3);border-color:rgba(220,38,38,.6);box-shadow:0 0 20px rgba(220,38,38,.3)}50%{background:rgba(220,38,38,.1);border-color:rgba(220,38,38,.3);box-shadow:0 0 8px rgba(220,38,38,.1)}100%{background:rgba(220,38,38,.3);border-color:rgba(220,38,38,.6);box-shadow:0 0 20px rgba(220,38,38,.3)}}
+@keyframes delFade{0%{opacity:1;transform:scale(1)}100%{opacity:0;transform:scale(.85)}}
+@keyframes spin{to{transform:rotate(360deg)}}
+.spin{animation:spin .7s linear infinite}
 #flash{position:fixed;inset:0;z-index:9990;pointer-events:none;border:8px solid #2563eb;box-shadow:inset 0 0 40px rgba(37,99,235,.25);display:none}
 #flash.on{display:block;animation:flashBorder .7s ease-in-out}
 #confetti{position:fixed;inset:0;z-index:9991;pointer-events:none;display:none}
 
 /* Layout */
-.container{max-width:640px;margin:0 auto;padding:20px 16px}
+.container{max-width:960px;margin:0 auto;padding:20px 16px}
 .header{display:flex;align-items:center;justify-content:space-between;margin-bottom:16px;gap:12px}
 .logo{display:flex;align-items:center;gap:8px;font-size:18px;font-weight:700;color:#fff}
 .logo .dot{width:8px;height:8px;border-radius:50%;flex-shrink:0}
 .logo .dot.on{background:#22c55e;box-shadow:0 0 8px rgba(34,197,94,.5)}
 .logo .dot.off{background:#ef4444}
+.logo-stroke{stroke-dasharray:200;stroke-dashoffset:200;animation:draw 1.5s ease forwards}
+.logo-stroke.s1{animation-delay:0s}
+.logo-stroke.s2{animation-delay:.3s}
+.logo-stroke.s3{animation-delay:.6s}
+.logo-stroke.s4{animation-delay:.8s}
+@keyframes draw{to{stroke-dashoffset:0}}
 .qr-btn{width:36px;height:36px;border-radius:8px;border:1px solid rgba(255,255,255,.08);background:rgba(255,255,255,.04);cursor:pointer;display:flex;align-items:center;justify-content:center;transition:all .15s}
 .qr-btn:hover{background:rgba(255,255,255,.1)}
 .qr-btn img{width:28px;height:28px;border-radius:4px;opacity:.6}
@@ -331,25 +427,25 @@ body{font-family:'Inter',-apple-system,system-ui,sans-serif;background:#020203;c
 .search-modal-item .sk-time{float:right;font-size:9px;color:rgba(255,255,255,.2);margin-left:12px}
 .search-modal-hint{padding:12px 16px;font-size:10px;color:rgba(255,255,255,.15);text-align:center;border-top:1px solid rgba(255,255,255,.04)}
 
-/* Clip list */
-.list{display:flex;flex-direction:column;gap:2px}
-.clip{padding:12px 12px;border-radius:12px;display:flex;align-items:center;min-height:48px;background:transparent;backdrop-filter:blur(10px);border:1px solid transparent;cursor:pointer;transition:all .2s;animation:fadeInUp .3s ease;box-shadow:0 2px 8px rgba(0,0,0,.2);position:relative;overflow:hidden}
-.clip::before{content:'';position:absolute;top:0;left:0;right:0;height:50%;background:linear-gradient(180deg,rgba(255,255,255,.08) 0%,rgba(255,255,255,.02) 60%,transparent 100%);border-radius:12px 12px 0 0;pointer-events:none}
-.clip::after{content:'';position:absolute;top:2px;left:10%;right:10%;height:1px;background:linear-gradient(90deg,transparent,rgba(255,255,255,.2),transparent);border-radius:1px;pointer-events:none}
+/* Clip grid */
+.list{display:grid;grid-template-columns:repeat(3,1fr);gap:10px}
+@media(max-width:700px){.list{grid-template-columns:repeat(2,1fr)}}
+@media(max-width:480px){.list{grid-template-columns:1fr}}
+.clip{padding:16px;border-radius:14px;display:flex;flex-direction:column;height:280px;background:transparent;backdrop-filter:blur(10px);border:1px solid transparent;cursor:pointer;transition:all .2s;animation:fadeInUp .3s ease;box-shadow:0 2px 8px rgba(0,0,0,.2);position:relative;overflow:hidden}
 .clip.m-local{border-color:var(--page-color-border,rgba(255,255,255,.1))}
 .clip.m-peer{border-color:var(--page-color-border,rgba(255,255,255,.15))}
 .clip:hover{background:var(--page-color-hover,rgba(255,255,255,.06))!important;box-shadow:0 4px 20px var(--page-color-shadow,rgba(0,0,0,.3))}
-@keyframes newClipIn{0%{opacity:0;transform:translateX(-30px) scale(.92)}30%{opacity:1;transform:translateX(6px) scale(1.02)}50%{transform:translateX(-3px) scale(1)}65%{transform:translateX(2px) scale(1)}80%{transform:translateX(-1px) scale(1)}100%{transform:translateX(0) scale(1)}}
-@keyframes newGlow{0%,100%{box-shadow:0 0 0 rgba(255,255,255,0)}25%{box-shadow:0 0 20px var(--glow-color,rgba(59,130,246,.4))}50%{box-shadow:0 0 8px var(--glow-color,rgba(59,130,246,.2))}75%{box-shadow:0 0 16px var(--glow-color,rgba(59,130,246,.3))}}
-@keyframes newShake{0%,100%{transform:rotate(0)}15%{transform:rotate(-1.5deg)}30%{transform:rotate(1.5deg)}45%{transform:rotate(-1deg)}60%{transform:rotate(1deg)}75%{transform:rotate(-.5deg)}}
-.clip.new{animation:newClipIn .6s cubic-bezier(.16,1,.3,1),newGlow 2s ease .3s,newShake .5s ease .6s}
+.clip.new{animation:slideInNew .5s cubic-bezier(.34,1.56,.64,1)}
+.clip.blink{animation:blink2 .4s ease 2}
+.clip.del-red{animation:delRed .5s ease 1;background:rgba(220,38,38,.3)!important;border-color:rgba(220,38,38,.6)!important;box-shadow:0 0 20px rgba(220,38,38,.3)!important;pointer-events:none}
+.clip.del-fade{animation:delFade .5s ease forwards;pointer-events:none}
 .clip .meta{display:flex;align-items:center;justify-content:flex-end;position:absolute;top:8px;right:8px;z-index:1}
 .clip .source{font-size:10px;font-weight:600;text-transform:uppercase;letter-spacing:.05em;display:flex;align-items:center;gap:4px}
 .clip .source.local{color:rgba(255,255,255,.55)}
 .clip .source.peer{color:rgba(59,130,246,.7)}
 
-.clip .time{font-size:8px;color:rgba(255,255,255,.18);position:absolute;bottom:6px;right:10px}
-.clip .text{font-size:10px;color:rgba(255,255,255,.55);line-height:1.5;word-break:break-all;white-space:nowrap;font-family:'JetBrains Mono',ui-monospace,monospace;overflow:hidden;text-overflow:ellipsis;flex:1;padding-right:60px}
+.clip .time{font-size:8px;color:rgba(255,255,255,.18);position:absolute;bottom:8px;right:10px}
+.clip .text{font-size:5px;color:rgba(255,255,255,.55);line-height:1.3;word-break:break-all;white-space:pre-wrap;font-family:'JetBrains Mono',ui-monospace,monospace;overflow:hidden;flex:1;padding-right:4px}
 .clip .text mark{background:rgba(250,204,21,.25);color:#fde047;border-radius:2px;padding:0 1px}
 .clip.copied{border-color:rgba(34,197,94,.5)!important;box-shadow:0 0 12px rgba(34,197,94,.15)!important}
 .clip-actions{display:flex;gap:4px;opacity:0;transition:opacity .15s}
@@ -360,6 +456,9 @@ body{font-family:'Inter',-apple-system,system-ui,sans-serif;background:#020203;c
 .act-btn.heart{color:rgba(255,255,255,.25)}
 .act-btn.heart.liked{color:#f472b6;border-color:rgba(244,114,182,.3);background:rgba(244,114,182,.1)}
 .act-btn svg{width:12px;height:12px}
+.act-btn{border-color:var(--page-color-border,rgba(255,255,255,.1))}
+.act-btn:hover{background:var(--page-color-hover,rgba(255,255,255,.15));color:var(--pc,#fff)}
+.pag-row{position:fixed;bottom:0;left:0;right:0;display:flex;align-items:center;justify-content:center;gap:8px;padding:14px 0;background:rgba(2,2,3,.85);backdrop-filter:blur(12px);border-top:1px solid rgba(255,255,255,.04);z-index:100}
 
 /* Empty */
 .empty{text-align:center;padding:60px 20px;color:rgba(255,255,255,.15)}
@@ -417,18 +516,25 @@ body{font-family:'Inter',-apple-system,system-ui,sans-serif;background:#020203;c
 <div class="container">
   <div class="header">
     <div class="logo">
-      <img src="/icon.svg" alt="" style="width:28px;height:28px;border-radius:6px">
+      <svg class="logo-icon" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128" style="width:28px;height:28px;border-radius:6px"><rect width="128" height="128" rx="28" fill="#0f172a"/><rect class="logo-stroke s1" x="30" y="28" width="42" height="52" rx="6" fill="none" stroke="#fff" stroke-width="4" opacity=".6"/><rect class="logo-stroke s2" x="56" y="48" width="42" height="52" rx="6" fill="none" stroke="#3b82f6" stroke-width="4"/><path class="logo-stroke s3" d="M72 60 L72 88" fill="none" stroke="#3b82f6" stroke-width="3" stroke-linecap="round" opacity=".5"/><path class="logo-stroke s4" d="M60 74 L84 74" fill="none" stroke="#3b82f6" stroke-width="3" stroke-linecap="round" opacity=".5"/></svg>
       <span>Clip</span>
       <span class="dot" id="peerDot"></span>
-      <span id="peerName" style="font-size:10px;font-weight:500;color:rgba(255,255,255,.3);letter-spacing:.02em"></span>
+      <span id="peerName" style="display:none"></span>
     </div>
-    <div style="display:flex;align-items:center;gap:8px">
-      <div class="search" style="margin:0;flex:1;min-width:160px">
-        <input type="text" id="searchInput" placeholder="Search clips..." oninput="onSearch(this.value)">
-        <button class="clear" id="searchClear" onclick="clearSearch()" style="display:none">x</button>
-      </div>
+    <div style="display:flex;align-items:center;gap:8px;font-size:10px;color:rgba(255,255,255,.3);letter-spacing:.02em">
+      <span title="This machine" style="display:flex;align-items:center;gap:4px"><svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="2" y="3" width="20" height="14" rx="2"/><path d="M8 21h8M12 17v4"/></svg> <span id="sLocalIp">-</span></span>
+      <span style="opacity:.3">|</span>
+      <span id="sPeerWrap" title="Peer machine" style="display:flex;align-items:center;gap:4px"><span class="dot" id="peerDot2" style="width:6px;height:6px"></span> <span id="sPeerIp">-</span></span>
+    </div>
+    <div style="display:flex;align-items:center;gap:6px">
+      <button class="qr-btn" onclick="openSearchModal()" title="Search (Cmd+K)">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="rgba(255,255,255,.5)" stroke-width="2"><circle cx="11" cy="11" r="8"/><path d="M21 21l-4.35-4.35"/></svg>
+      </button>
+      <button class="qr-btn" onclick="dedupClips()" title="Remove duplicates">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="rgba(255,255,255,.5)" stroke-width="2"><path d="M3 6h18M8 6V4h8v2M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6"/><path d="M10 11v6M14 11v6"/></svg>
+      </button>
       <button class="qr-btn" onclick="showQR()" title="QR Code">
-        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="rgba(255,255,255,.5)" stroke-width="1.5"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="3" height="3"/><line x1="21" y1="14" x2="21" y2="14.01"/><line x1="21" y1="21" x2="21" y2="21.01"/><line x1="14" y1="21" x2="14" y2="21.01"/></svg>
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="rgba(255,255,255,.5)" stroke-width="1.5"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="3" height="3"/><line x1="21" y1="14" x2="21" y2="14.01"/><line x1="21" y1="21" x2="21" y2="21.01"/><line x1="14" y1="21" x2="14" y2="21.01"/></svg>
       </button>
     </div>
   </div>
@@ -438,7 +544,8 @@ body{font-family:'Inter',-apple-system,system-ui,sans-serif;background:#020203;c
   </div>
 
 
-  <div id="clipList" class="list"></div>
+  <div id="clipList" class="list" style="padding-bottom:60px"></div>
+  <div id="pagBar" class="pag-row" style="display:none"></div>
   <div id="emptyState" class="empty">
     <svg width="64" height="64" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width=".6"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
     <p>Copy something to get started</p>
@@ -460,7 +567,7 @@ body{font-family:'Inter',-apple-system,system-ui,sans-serif;background:#020203;c
       <button class="modal-btn" id="modalOpen" title="Open link" style="display:none;background:rgba(34,197,94,.15);color:#4ade80;border:1px solid rgba(34,197,94,.25)"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6M15 3h6v6M10 14L21 3"/></svg></button>
       <button class="modal-btn" onclick="modalSave()" title="Save edits" style="background:rgba(139,92,246,.15);color:#a78bfa;border:1px solid rgba(139,92,246,.25)"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/><path d="M17 21v-8H7v8M7 3v5h8"/></svg></button>
       <button class="modal-btn copy" onclick="modalCopy()" title="Copy"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg></button>
-      <button class="modal-btn" onclick="sendToStickies()" title="Send to Stickies" style="background:rgba(255,179,0,.12);color:#FFB300;border:1px solid rgba(255,179,0,.25)"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M12 8v8M8 12h8"/></svg></button>
+      <button class="modal-btn" id="modalStickies" onclick="sendToStickies()" title="Send to Stickies" style="display:none;background:rgba(255,179,0,.12);color:#FFB300;border:1px solid rgba(255,179,0,.25)"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M12 8v8M8 12h8"/></svg></button>
       <button class="modal-btn" id="modalHeart" onclick="toggleModalHeart()" title="Favorite" style="background:rgba(244,114,182,.1);color:#f472b6;border:1px solid rgba(244,114,182,.2)"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z"/></svg></button>
       <button class="modal-btn" onclick="modalDelete()" title="Delete" style="background:rgba(239,68,68,.12);color:#ef4444;border:1px solid rgba(239,68,68,.25)"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 6h18M8 6V4h8v2M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6"/></svg></button>
     </div>
@@ -473,7 +580,7 @@ const clips = [];
 let searchQuery = '';
 let searchTimer = null;
 const LOCAL_NAME = '${cfg.name}';
-const PAGE_SIZE = 15;
+const PAGE_SIZE = 9;
 let currentPage = 1;
 let modalClipId = null;
 let PEER_ADDR = '';
@@ -486,9 +593,14 @@ function connectUI() {
     if (msg.type === 'new-clip') {
       clips.unshift(msg.clip);
       if (clips.length > 200) clips.pop();
-      if (!searchQuery) render(msg.clip.id);
+      if (!searchQuery) { currentPage = 1; render(msg.clip.id); }
       flash(); confetti(); playClick();
       document.getElementById('sClips').textContent = clips.length;
+      // blink 2x after slide-in
+      setTimeout(() => {
+        const el = document.getElementById('c-' + msg.clip.id);
+        if (el) { el.classList.remove('new'); el.classList.add('blink'); }
+      }, 500);
     }
     if (msg.type === 'bump') {
       const idx = clips.findIndex(c => c.id === msg.clip.id);
@@ -505,19 +617,40 @@ function connectUI() {
     if (msg.type === 'delete') {
       const idx = clips.findIndex(c => c.id === msg.id);
       if (idx !== -1) clips.splice(idx, 1);
-      const el = document.getElementById('c-' + msg.id);
-      if (el) { el.style.opacity='0'; el.style.transform='translateX(-20px)'; setTimeout(() => { el.remove(); if (!clips.length) document.getElementById('emptyState').style.display='block'; }, 200); }
       document.getElementById('sClips').textContent = clips.length;
+      playClick();
+      const el = document.getElementById('c-' + msg.id);
+      if (el) {
+        // red blink for 1s
+        el.classList.add('del-red');
+        setTimeout(() => {
+          // fade out
+          el.classList.remove('del-red');
+          el.classList.add('del-fade');
+          setTimeout(() => {
+            el.style.display = 'none';
+          }, 500);
+        }, 1000);
+      }
+    }
+    if (msg.type === 'dedup') {
+      loadClips();
     }
     if (msg.type === 'peer') {
       document.getElementById('peerDot').className = 'dot ' + (msg.connected ? 'on' : 'off');
+      document.getElementById('peerDot2').className = 'dot ' + (msg.connected ? 'on' : 'off');
       document.getElementById('peerName').textContent = msg.connected ? (PEER_ADDR || '') : '';
+      document.getElementById('sPeerIp').style.opacity = msg.connected ? '1' : '.4';
     }
     if (msg.type === 'state') {
       document.getElementById('peerDot').className = 'dot ' + (msg.peerConnected ? 'on' : 'off');
+      document.getElementById('peerDot2').className = 'dot ' + (msg.peerConnected ? 'on' : 'off');
       document.getElementById('peerName').textContent = msg.peerConnected ? (msg.peer || '') : '';
       PEER_ADDR = msg.peer || '';
-      document.getElementById('sSyncs').textContent = msg.syncCount || 0;
+      if (msg.localIp) document.getElementById('sLocalIp').textContent = msg.localIp;
+      document.getElementById('sPeerIp').textContent = msg.peer || '-';
+      document.getElementById('sPeerIp').style.opacity = msg.peerConnected ? '1' : '.4';
+      document.getElementById('sPeerIp').title = msg.peerConnected ? 'Connected' : 'Offline - run: CLIP_PEER=' + (msg.localIp || 'THIS_IP') + ' CLIP_TOKEN=clip-sync-secret npm start';
     }
   };
   ws.onclose = () => setTimeout(connectUI, 2000);
@@ -537,7 +670,7 @@ async function loadClips() {
 }
 
 // ── Render ──
-function render(newId) {
+function render(newId, pageChange) {
   const list = document.getElementById('clipList');
   const empty = document.getElementById('emptyState');
   let items = clips;
@@ -561,31 +694,74 @@ function render(newId) {
     [99,102,241],   // indigo
   ];
   const pc = pageColors[(currentPage - 1) % pageColors.length];
-  list.style.setProperty('--page-color-border', 'rgba(' + pc[0] + ',' + pc[1] + ',' + pc[2] + ',.2)');
-  list.style.setProperty('--page-color-hover', 'rgba(' + pc[0] + ',' + pc[1] + ',' + pc[2] + ',.12)');
-  list.style.setProperty('--page-color-shadow', 'rgba(' + pc[0] + ',' + pc[1] + ',' + pc[2] + ',.15)');
-  document.querySelector('.root').style.background = 'radial-gradient(ellipse at 20% 50%,rgba(' + pc[0] + ',' + pc[1] + ',' + pc[2] + ',.15) 0%,transparent 60%),radial-gradient(ellipse at 80% 10%,rgba(' + pc[0] + ',' + pc[1] + ',' + pc[2] + ',.1) 0%,transparent 55%),#020203';
-  list.style.setProperty('--glow-color', 'rgba(' + pc[0] + ',' + pc[1] + ',' + pc[2] + ',.4)');
+  const pcRgb = pc[0] + ',' + pc[1] + ',' + pc[2];
+  list.style.setProperty('--page-color-border', 'rgba(' + pcRgb + ',.2)');
+  list.style.setProperty('--page-color-hover', 'rgba(' + pcRgb + ',.12)');
+  list.style.setProperty('--page-color-shadow', 'rgba(' + pcRgb + ',.15)');
+  list.style.setProperty('--page-color-blink', 'rgba(' + pcRgb + ',.7)');
+  list.style.setProperty('--page-color-blink-glow', 'rgba(' + pcRgb + ',.3)');
+  list.style.setProperty('--pc', 'rgb(' + pcRgb + ')');
+  document.querySelector('.root').style.background = 'radial-gradient(ellipse at 20% 50%,rgba(' + pcRgb + ',.15) 0%,transparent 60%),radial-gradient(ellipse at 80% 10%,rgba(' + pcRgb + ',.1) 0%,transparent 55%),#020203';
+  list.style.setProperty('--glow-color', 'rgba(' + pcRgb + ',.4)');
+  // Theme logo + header SVGs to page color
+  document.querySelectorAll('.logo-stroke.s2,.logo-stroke.s3,.logo-stroke.s4').forEach(el => { el.style.stroke = 'rgb(' + pcRgb + ')'; el.style.transition = 'stroke .4s'; });
+  document.querySelector('.logo-icon rect:first-child').style.fill = 'rgba(' + pcRgb + ',.15)';
+  document.querySelector('.logo-icon rect:first-child').style.transition = 'fill .4s';
+  // Re-trigger logo draw animation on page change
+  if (pageChange) {
+    document.querySelectorAll('.logo-stroke').forEach(el => {
+      el.style.animation = 'none';
+      el.style.strokeDashoffset = '200';
+      void el.getBoundingClientRect();
+    });
+    requestAnimationFrame(() => {
+      document.querySelectorAll('.logo-stroke').forEach(el => {
+        el.style.animation = '';
+        el.style.strokeDashoffset = '';
+      });
+    });
+  }
 
-  const laptopIcon = '<svg style="width:12px;height:10px;opacity:.5;flex-shrink:0" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="2" y="3" width="20" height="14" rx="2"/><path d="M8 21h8M12 17v4"/></svg>';
   list.innerHTML = pageItems.map((c, i) => {
     const isLocal = c.source === LOCAL_NAME;
     const mClass = isLocal ? 'm-local' : 'm-peer';
-    const sClass = isLocal ? 'local' : 'peer';
     const preview = searchQuery ? highlight(esc(c.preview), searchQuery) : esc(c.preview);
-    const bgAlpha = Math.max(0, 0.25 - i * 0.025);
+    const bgAlpha = Math.max(0, 0.18 - i * 0.015);
     const bgStyle = 'background:rgba(' + pc[0] + ',' + pc[1] + ',' + pc[2] + ',' + bgAlpha.toFixed(3) + ')';
-    return '<div class="clip ' + mClass + (c.id === newId ? ' new' : '') + '" id="c-' + c.id + '" style="' + bgStyle + '" onclick="openModal(\\''+c.id+'\\')"><div class="meta"><div class="clip-actions"><button class="act-btn" onclick="event.stopPropagation();quickCopy(\\''+c.id+'\\',this)" title="Copy"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg></button><button class="act-btn del" onclick="event.stopPropagation();delClip(\\''+c.id+'\\',this)" title="Delete"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 6h18M8 6V4h8v2M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6"/></svg></button></div></div><div class="text">' + preview + '</div><span style="position:absolute;bottom:4px;right:8px;font-size:8px;color:rgba(255,255,255,.25)">' + ago(c.time) + '</span></div>';
+    const lenLabel = c.length > 999 ? (c.length/1000).toFixed(1)+'k' : c.length;
+    return '<div class="clip ' + mClass + (c.id === newId ? ' new' : '') + '" id="c-' + c.id + '" style="' + bgStyle + '" onclick="openModal(\\''+c.id+'\\')"><div class="meta"><div class="clip-actions"><button class="act-btn" onclick="event.stopPropagation();quickCopy(\\''+c.id+'\\',this)" title="Copy"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg></button><button class="act-btn del" onclick="event.stopPropagation();delClip(\\''+c.id+'\\',this)" title="Delete"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 6h18M8 6V4h8v2M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6"/></svg></button></div></div><div class="text">' + preview + '</div><div style="display:flex;align-items:center;justify-content:space-between;margin-top:auto;padding-top:8px"><span style="font-size:8px;color:rgba(255,255,255,.2)">' + lenLabel + ' chars</span><span style="font-size:8px;color:rgba(255,255,255,.2)">' + ago(c.time) + '</span></div></div>';
   }).join('');
 
-  // Pagination
+  // Pagination — always visible, fixed at bottom
+  const pagBar = document.getElementById('pagBar');
   if (totalPages > 1) {
     const pCol = 'rgba(' + pc[0] + ',' + pc[1] + ',' + pc[2];
-    list.innerHTML += '<div style="display:flex;align-items:center;justify-content:center;gap:12px;padding:16px 0"><button onclick="goPage(-1)" style="background:' + pCol + ',.08);border:1px solid ' + pCol + ',.2);color:' + pCol + ',.7);padding:4px 12px;border-radius:8px;cursor:pointer;font-size:11px' + (currentPage<=1?';opacity:.3;pointer-events:none':'') + '">Prev</button><span style="font-size:10px;color:' + pCol + ',.35)">' + currentPage + ' / ' + totalPages + '</span><button onclick="goPage(1)" style="background:' + pCol + ',.08);border:1px solid ' + pCol + ',.2);color:' + pCol + ',.7);padding:4px 12px;border-radius:8px;cursor:pointer;font-size:11px' + (currentPage>=totalPages?';opacity:.3;pointer-events:none':'') + '">Next</button></div>';
+    let pagHtml = '';
+    pagHtml += '<button onclick="goPage(-1)" style="width:32px;height:32px;border-radius:50%;background:' + pCol + ',.06);border:1px solid ' + pCol + ',.15);color:' + pCol + ',.6);cursor:pointer;font-size:14px;display:flex;align-items:center;justify-content:center' + (currentPage<=1?';opacity:.25;pointer-events:none':'') + '"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M15 18l-6-6 6-6"/></svg></button>';
+    for (let p = 1; p <= totalPages; p++) {
+      const isActive = p === currentPage;
+      const btnPc = pageColors[(p - 1) % pageColors.length];
+      const btnCol = 'rgba(' + btnPc[0] + ',' + btnPc[1] + ',' + btnPc[2];
+      pagHtml += '<button onclick="currentPage='+p+';render(null,true)" style="width:32px;height:32px;border-radius:50%;font-size:11px;font-weight:600;cursor:pointer;border:' + (isActive ? '1px solid ' + btnCol + ',.8)' : '1px solid ' + btnCol + ',.15)') + ';background:' + (isActive ? 'rgb(' + btnPc[0] + ',' + btnPc[1] + ',' + btnPc[2] + ')' : btnCol + ',.06)') + ';color:' + (isActive ? '#fff' : btnCol + ',.5)') + '">' + p + '</button>';
+    }
+    pagHtml += '<button onclick="goPage(1)" style="width:32px;height:32px;border-radius:50%;background:' + pCol + ',.06);border:1px solid ' + pCol + ',.15);color:' + pCol + ',.6);cursor:pointer;font-size:14px;display:flex;align-items:center;justify-content:center' + (currentPage>=totalPages?';opacity:.25;pointer-events:none':'') + '"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 18l6-6-6-6"/></svg></button>';
+    pagBar.innerHTML = pagHtml;
+    pagBar.style.display = 'flex';
+  } else {
+    pagBar.style.display = 'none';
+  }
+
+  // Stagger animation on page change
+  if (pageChange) {
+    const cards = list.querySelectorAll('.clip');
+    cards.forEach((card, i) => {
+      card.classList.add('page-in');
+      card.style.animationDelay = (i * 0.08) + 's';
+    });
   }
 }
 
-function goPage(dir) { currentPage += dir; render(); }
+function goPage(dir) { currentPage += dir; render(null, true); }
 
 // ── Modal ──
 function openModal(id) {
@@ -602,6 +778,8 @@ function openModal(id) {
   const isUrl = /^https?:\\/\\//i.test(c.text.trim());
   openBtn.style.display = isUrl ? 'flex' : 'none';
   openBtn.onclick = () => window.open(c.text.trim(), '_blank');
+  // Send-to-Stickies: only enabled for long clips (> 150 chars)
+  document.getElementById('modalStickies').style.display = c.text.length > 150 ? 'flex' : 'none';
   document.getElementById('clipModal').classList.add('show');
 }
 
@@ -681,15 +859,45 @@ function toggleModalHeart() {
 async function sendToStickies() {
   const text = document.getElementById('modalText').value.trim();
   if (!text) return;
+  const btn = document.getElementById('modalStickies');
+  if (btn.dataset.busy) return;
+  const original = btn.innerHTML;
+  btn.dataset.busy = '1';
+  btn.style.pointerEvents = 'none';
+  btn.style.opacity = '.65';
+  btn.innerHTML = '<svg class="spin" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><path d="M21 12a9 9 0 1 1-6.219-8.56"/></svg>';
+  toast('Sending to Stickies...', '#FFB300', false);
+  const started = Date.now();
   try {
     const res = await fetch('/api/stickies', { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({ text }) });
     const data = await res.json();
+    const wait = 500 - (Date.now() - started); // keep the spinner visible long enough to see
+    if (wait > 0) await new Promise(r => setTimeout(r, wait));
     if (data.ok) { toast('Sent to Stickies', '#FFB300'); } else { toast('Stickies failed', 'red'); }
   } catch { toast('Stickies failed', 'red'); }
+  finally {
+    btn.innerHTML = original;
+    btn.style.pointerEvents = '';
+    btn.style.opacity = '';
+    delete btn.dataset.busy;
+  }
 }
 
 async function delClip(id) {
   try { await fetch('/api/clips/' + id, { method: 'DELETE' }); toast('Deleted', 'red'); } catch {}
+}
+
+async function dedupClips() {
+  try {
+    const r = await fetch('/api/dedup', { method: 'POST' });
+    const d = await r.json();
+    if (d.removed > 0) {
+      toast(d.removed + ' dupes removed', 'blue');
+      loadClips();
+    } else {
+      toast('No dupes', 'blue');
+    }
+  } catch { toast('Dedup failed', 'red'); }
 }
 
 async function modalDelete() {
@@ -707,9 +915,11 @@ function onSearch(val) {
 }
 
 function clearSearch() {
-  document.getElementById('searchInput').value = '';
+  const si = document.getElementById('searchInput');
+  if (si) si.value = '';
   searchQuery = '';
-  document.getElementById('searchClear').style.display = 'none';
+  const sc = document.getElementById('searchClear');
+  if (sc) sc.style.display = 'none';
   render();
 }
 
@@ -817,7 +1027,8 @@ function toast(msg, type, withConfetti) {
   el.classList.remove('show');
   el.offsetHeight;
   el.classList.add('show');
-  setTimeout(() => { el.classList.remove('show'); }, 3000);
+  clearTimeout(window.__toastT);
+  window.__toastT = setTimeout(() => { el.classList.remove('show'); }, 3000);
 }
 
 // ── Search Modal (Cmd+K) ──
@@ -887,13 +1098,24 @@ setInterval(() => { if (!searchQuery) render(); }, 30000); // refresh ages
 }
 
 // ── Boot ─────────────────────────────────────────────────────────────────────
-server.listen(cfg.port, () => {
-  const dupes = db.dedup();
-  if (dupes) log(`Cleaned ${dupes} duplicate clips`);
-  log(`Clip running on :${cfg.port}`);
-  log(`Machine: ${cfg.name}`);
-  log(`Peer: ${cfg.peer || "none"}`);
-  log(`UI: http://localhost:${cfg.port}`);
-  setInterval(poll, cfg.pollMs);
-  connectToPeer();
-});
+function boot() {
+  server.listen(cfg.port, () => {
+    const dupes = db.dedup();
+    if (dupes) log(`Cleaned ${dupes} duplicate clips`);
+    log(`Clip running on :${cfg.port}`);
+    log(`Machine: ${cfg.name}`);
+    log(`Peer: ${cfg.peer || "none"}`);
+    log(`UI: http://localhost:${cfg.port}`);
+    setInterval(poll, cfg.pollMs);
+    connectToPeer();
+  });
+}
+
+if (require.main === module) boot();
+
+// Exported for tests (no effect when run directly via `node src/server.js`)
+module.exports = {
+  app, server, wss, boot,
+  addToHistory, broadcastToUI, getLanIp, buildHTML,
+  poll, connectToPeer, handlePeer, log, uiClients,
+};

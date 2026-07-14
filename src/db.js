@@ -56,15 +56,46 @@ function update(id, text) {
 }
 
 function dedup() {
-  const seen = new Set();
-  const dupes = [];
+  const dupeSet = new Set();
   const rows = stmts.all.all(9999);
+  // Hash-based dedup
+  const seenHash = new Set();
   for (const r of rows) {
-    if (seen.has(r.hash)) dupes.push(r.id);
-    else seen.add(r.hash);
+    if (seenHash.has(r.hash)) dupeSet.add(r.id);
+    else seenHash.add(r.hash);
   }
-  for (const id of dupes) stmts.delete.run(id);
-  return dupes.length;
+  // Fuzzy prefix dedup: group clips sharing the same first 60 chars,
+  // keep only the longest in each group
+  const groups = {};
+  for (const r of rows) {
+    if (dupeSet.has(r.id)) continue;
+    const key = r.text.slice(0, 60);
+    if (!groups[key]) groups[key] = [];
+    groups[key].push(r);
+  }
+  for (const g of Object.values(groups)) {
+    if (g.length <= 1) continue;
+    g.sort((a, b) => b.length - a.length); // longest first
+    for (let i = 1; i < g.length; i++) dupeSet.add(g[i].id);
+  }
+  for (const id of dupeSet) stmts.delete.run(id);
+  return dupeSet.size;
 }
 
-module.exports = { add, all, search, remove, update, count, dedup };
+function cleanup() {
+  const rows = stmts.all.all(9999);
+  let removed = 0;
+  for (const r of rows) {
+    const qCount = (r.text.match(/\?/g) || []).length;
+    const ratio = r.text.length > 0 ? qCount / r.text.length : 0;
+    // Remove clips where >30% of chars are ? (corrupted box-drawing from LANG bug)
+    // or clips with mojibake double-encoded UTF-8
+    if (ratio > 0.3 || /[\u201a\u00c4\u00e0\u221a\u00ac]{2}/.test(r.text)) {
+      stmts.delete.run(r.id);
+      removed++;
+    }
+  }
+  return removed;
+}
+
+module.exports = { add, all, search, remove, update, count, dedup, cleanup };
