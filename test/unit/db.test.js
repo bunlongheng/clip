@@ -366,3 +366,24 @@ describe("cleanup()", () => {
     expect(db.count()).toBe(1);
   });
 });
+
+describe("findByHash() — indexed single-row lookup used on the write-time dedup hot path", () => {
+  test("returns the row matching the given hash", () => {
+    db.add(makeClip({ id: "fh1", text: "findable", hash: "FHHASH" }));
+    const row = db.findByHash("FHHASH");
+    expect(row).toBeDefined();
+    expect(row.id).toBe("fh1");
+    expect(row.text).toBe("findable");
+  });
+
+  test("returns undefined when no row matches", () => {
+    expect(db.findByHash("no-such-hash")).toBeUndefined();
+  });
+
+  test("returns only the newest row when multiple share a hash", () => {
+    db.add(makeClip({ id: "fh-old", text: "old", hash: "DUPHASH", time: "2020-01-01T00:00:00.000Z" }));
+    db.add(makeClip({ id: "fh-new", text: "new", hash: "DUPHASH", time: "2024-01-01T00:00:00.000Z" }));
+    const row = db.findByHash("DUPHASH");
+    expect(row.id).toBe("fh-new");
+  });
+});

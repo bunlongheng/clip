@@ -85,6 +85,30 @@ test("favorite heart toggles Favorited then Unfavorited", async ({ page }) => {
   await expect(heart.locator("svg path")).toHaveAttribute("fill", "none");
 });
 
+test("favorite state is scoped per clip, not a single global toggle", async ({ page }) => {
+  seed([{ text: "clip-a-favorite-me" }, { text: "clip-b-not-favorited" }]);
+  await page.goto("/");
+  const cards = page.locator(".clip");
+  const heart = page.locator("#modalHeart");
+
+  // Favorite whichever clip renders first (newest-first order isn't asserted here).
+  await cards.nth(0).click();
+  await heart.click();
+  await expect(heart.locator("svg path")).toHaveAttribute("fill", "currentColor");
+  await page.locator("#clipModal").click({ position: { x: 5, y: 5 } }); // backdrop, closes it
+  await expect(page.locator("#clipModal")).not.toHaveClass(/show/);
+
+  // The OTHER clip must open unfavorited - no cross-clip bleed.
+  await cards.nth(1).click();
+  await expect(heart.locator("svg path")).toHaveAttribute("fill", "none");
+  await page.locator("#clipModal").click({ position: { x: 5, y: 5 } });
+  await expect(page.locator("#clipModal")).not.toHaveClass(/show/);
+
+  // Reopening the first clip still shows it favorited within the session.
+  await cards.nth(0).click();
+  await expect(heart.locator("svg path")).toHaveAttribute("fill", "currentColor");
+});
+
 test("modal Delete closes modal and removes the clip", async ({ page }) => {
   seed([{ text: "modal-delete-target" }, { text: "survivor" }]);
   await page.goto("/");

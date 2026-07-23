@@ -17,8 +17,10 @@
         <string>MyMac</string>
         <key>CLIP_PEER</key>
         <string>192.168.1.50:4545</string>
-        <key>CLIP_TOKEN</key>
-        <string>change-this-shared-secret</string>
+        <!-- Leave CLIP_TOKEN unset to auto-generate one into .env on first run,
+             or set it here to the SAME value used on the other machine. Never
+             leave this as a hardcoded placeholder - config.js refuses to run
+             with a known-public default and will generate its own instead. -->
     </dict>
 
     <key>RunAtLoad</key>
@@ -27,11 +29,15 @@
     <key>KeepAlive</key>
     <true/>
 
+    <!-- launchd does not expand ~ - use your real home dir, e.g.
+         /Users/yourname/Library/Logs/clip.log. That path persists across
+         reboots and is not world-writable, unlike /tmp which macOS clears
+         on every restart. -->
     <key>StandardOutPath</key>
-    <string>/tmp/clip.log</string>
+    <string>/ABSOLUTE/PATH/TO/HOME/Library/Logs/clip.log</string>
 
     <key>StandardErrorPath</key>
-    <string>/tmp/clip.err</string>
+    <string>/ABSOLUTE/PATH/TO/HOME/Library/Logs/clip.err</string>
 
     <key>ThrottleInterval</key>
     <integer>5</integer>

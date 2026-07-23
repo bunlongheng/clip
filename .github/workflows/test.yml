@@ -1,0 +1,22 @@
+name: test
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  unit:
+    # better-sqlite3 is a native module and clipboard.js shells out to pbpaste/
+    # pbcopy - macos-latest keeps the runner close to the real target platform.
+    # (e2e is intentionally NOT run here - it drives the real system clipboard,
+    # which is not reliable on a CI runner; run `npm run test:e2e` locally.)
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: npm ci
+      - run: npm run lint
+      - run: npm test

@@ -1,10 +1,12 @@
 // ── Playwright E2E config — drives the live Clip web UI ──────────────────────
 const { defineConfig, devices } = require("@playwright/test");
 const path = require("path");
+const { E2E_TOKEN: TOKEN } = require("./test/helpers/e2e-fixtures");
 
 // Isolated test instance: dedicated port, throwaway DB, dead peer, no polling.
 const PORT = 4547;
 const DB_PATH = path.join(__dirname, "test", ".tmp", "e2e.db");
+const ENV_PATH = path.join(__dirname, "test", ".tmp", "e2e.env");
 
 module.exports = defineConfig({
   testDir: "./test/e2e",
@@ -18,6 +20,10 @@ module.exports = defineConfig({
     baseURL: `http://localhost:${PORT}`,
     permissions: ["clipboard-read", "clipboard-write"],
     trace: "off",
+    // Auth is cookie-based after a real page load, but every request (including
+    // the WS handshakes) also accepts a bearer token - simplest way to keep
+    // every existing spec's page.goto('/') working with no per-spec changes.
+    extraHTTPHeaders: { Authorization: `Bearer ${TOKEN}` },
   },
   projects: [
     { name: "chromium", use: { ...devices["Desktop Chrome"] } },
@@ -30,9 +36,11 @@ module.exports = defineConfig({
     env: {
       CLIP_PORT: String(PORT),
       CLIP_DB_PATH: DB_PATH,
+      CLIP_ENV_PATH: ENV_PATH, // never touch the real repo .env during e2e runs
       CLIP_PEER: "127.0.0.1:9", // dead address — never connects, stays isolated
       CLIP_POLL_MS: "86400000", // effectively disable clipboard polling during tests
       CLIP_NAME: "TestMachine",
+      CLIP_TOKEN: TOKEN,
       STICKIES_API_TOKEN: "", // force the no-token path; tests stub /api/stickies
     },
   },
@@ -40,3 +48,4 @@ module.exports = defineConfig({
 
 module.exports.E2E_PORT = PORT;
 module.exports.E2E_DB_PATH = DB_PATH;
+module.exports.E2E_TOKEN = TOKEN;

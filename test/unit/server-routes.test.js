@@ -4,6 +4,8 @@ const { tmpDbPath, makeClip } = require("../helpers/factory");
 
 process.env.CLIP_DB_PATH = tmpDbPath();
 process.env.CLIP_PEER = "127.0.0.1:9";        // dead peer — connectToPeer never connects
+process.env.CLIP_TOKEN = "route-test-token";  // fixed, known token for every request below
+process.env.CLIP_ENV_PATH = require("path").join(require("os").tmpdir(), "clip-route-test-env-" + Date.now() + ".env");
 process.env.STICKIES_API_TOKEN = "test-token"; // enable the stickies success path
 process.env.STICKIES_API_URL = "http://localhost:4444";
 
@@ -16,6 +18,7 @@ const WS = require("ws");
 const msw = makeServer();
 
 let server, base, port;
+const AUTH = { Authorization: `Bearer ${cfg.token}` };
 
 beforeAll(async () => {
   msw.listen({ onUnhandledRequest: "bypass" }); // let our own fetch() pass through
@@ -45,19 +48,37 @@ function seed(spec) {
 
 // ── GET / ────────────────────────────────────────────────────────────────────
 describe("GET /", () => {
-  test("returns 200 HTML containing the document + title", async () => {
+  test("without a token returns 401 and does NOT leak clip content", async () => {
     const res = await fetch(`${base}/`);
+    expect(res.status).toBe(401);
+    const body = await res.text();
+    expect(body).toContain("CLIP_TOKEN");
+  });
+
+  test("with the correct bearer token returns 200 HTML containing the document + title", async () => {
+    const res = await fetch(`${base}/`, { headers: AUTH });
     expect(res.status).toBe(200);
     expect(res.headers.get("content-type")).toContain("text/html");
     const body = await res.text();
     expect(body).toContain("<!DOCTYPE html>");
     expect(body).toContain("<title>Clip</title>");
   });
+
+  test("with the correct token sets a clip_token cookie for subsequent requests", async () => {
+    const res = await fetch(`${base}/?token=${cfg.token}`);
+    expect(res.status).toBe(200);
+    expect(res.headers.get("set-cookie") || "").toContain("clip_token=");
+  });
+
+  test("with a wrong token returns 401", async () => {
+    const res = await fetch(`${base}/?token=not-the-token`);
+    expect(res.status).toBe(401);
+  });
 });
 
-// ── GET /status ──────────────────────────────────────────────────────────────
+// ── GET /status — intentionally NOT gated (local health check convenience) ───
 describe("GET /status", () => {
-  test("returns the running status JSON shape", async () => {
+  test("returns the running status JSON shape with no auth required", async () => {
     const res = await fetch(`${base}/status`);
     expect(res.status).toBe(200);
     const j = await res.json();
@@ -78,12 +99,30 @@ describe("GET /status", () => {
   });
 });
 
+// ── /api/* auth gate ─────────────────────────────────────────────────────────
+describe("/api/* auth", () => {
+  test("GET /api/clips without a token is rejected", async () => {
+    const res = await fetch(`${base}/api/clips`);
+    expect(res.status).toBe(401);
+  });
+
+  test("GET /api/clips with the wrong token is rejected", async () => {
+    const res = await fetch(`${base}/api/clips`, { headers: { Authorization: "Bearer wrong" } });
+    expect(res.status).toBe(401);
+  });
+
+  test("GET /api/clips with the correct bearer token succeeds", async () => {
+    const res = await fetch(`${base}/api/clips`, { headers: AUTH });
+    expect(res.status).toBe(200);
+  });
+});
+
 // ── GET /api/clips ───────────────────────────────────────────────────────────
 describe("GET /api/clips", () => {
   test("returns all clips when no query is given", async () => {
     seed({ text: "all one", source: "M4" });
     seed({ text: "all two", source: "M4" });
-    const res = await fetch(`${base}/api/clips`);
+    const res = await fetch(`${base}/api/clips`, { headers: AUTH });
     expect(res.status).toBe(200);
     const j = await res.json();
     expect(Array.isArray(j.clips)).toBe(true);
@@ -94,7 +133,7 @@ describe("GET /api/clips", () => {
   test("returns search results + {search:true, query} when ?q= is provided", async () => {
     seed({ text: "needle haystack", source: "M4" });
     seed({ text: "totally unrelated", source: "M4" });
-    const res = await fetch(`${base}/api/clips?q=needle`);
+    const res = await fetch(`${base}/api/clips?q=needle`, { headers: AUTH });
     const j = await res.json();
     expect(j.search).toBe(true);
     expect(j.query).toBe("needle");
@@ -104,16 +143,25 @@ describe("GET /api/clips", () => {
 
   test("a blank/whitespace query falls back to returning all clips (no search flag)", async () => {
     seed({ text: "blank query a", source: "M4" });
-    const res = await fetch(`${base}/api/clips?q=%20%20`);
+    const res = await fetch(`${base}/api/clips?q=%20%20`, { headers: AUTH });
     const j = await res.json();
     expect(j.search).toBeUndefined();
     expect(j.clips).toHaveLength(1);
   });
 
   test("returns an empty array when there are no clips", async () => {
-    const res = await fetch(`${base}/api/clips`);
+    const res = await fetch(`${base}/api/clips`, { headers: AUTH });
     const j = await res.json();
     expect(j.clips).toEqual([]);
+  });
+});
+
+// ── GET /api/config ──────────────────────────────────────────────────────────
+describe("GET /api/config", () => {
+  test("returns this machine's name for the client to bootstrap LOCAL_NAME", async () => {
+    const res = await fetch(`${base}/api/config`, { headers: AUTH });
+    expect(res.status).toBe(200);
+    expect((await res.json()).name).toBe(cfg.name);
   });
 });
 
@@ -123,7 +171,7 @@ describe("PUT /api/clips/:id", () => {
     const id = seed({ text: "before edit", source: "M4" });
     const res = await fetch(`${base}/api/clips/${id}`, {
       method: "PUT",
-      headers: { "Content-Type": "application/json" },
+      headers: { "Content-Type": "application/json", ...AUTH },
       body: JSON.stringify({ text: "  after edit  " }),
     });
     expect(res.status).toBe(200);
@@ -136,7 +184,7 @@ describe("PUT /api/clips/:id", () => {
     const id = seed({ text: "keep me", source: "M4" });
     const res = await fetch(`${base}/api/clips/${id}`, {
       method: "PUT",
-      headers: { "Content-Type": "application/json" },
+      headers: { "Content-Type": "application/json", ...AUTH },
       body: JSON.stringify({ text: "" }),
     });
     expect((await res.json()).ok).toBe(false);
@@ -146,7 +194,7 @@ describe("PUT /api/clips/:id", () => {
     const id = seed({ text: "still here", source: "M4" });
     const res = await fetch(`${base}/api/clips/${id}`, {
       method: "PUT",
-      headers: { "Content-Type": "application/json" },
+      headers: { "Content-Type": "application/json", ...AUTH },
       body: JSON.stringify({ text: "   \n  " }),
     });
     expect((await res.json()).ok).toBe(false);
@@ -155,7 +203,7 @@ describe("PUT /api/clips/:id", () => {
   test("returns {ok:false} for an unknown id (nothing to update)", async () => {
     const res = await fetch(`${base}/api/clips/does-not-exist`, {
       method: "PUT",
-      headers: { "Content-Type": "application/json" },
+      headers: { "Content-Type": "application/json", ...AUTH },
       body: JSON.stringify({ text: "valid text" }),
     });
     expect((await res.json()).ok).toBe(false);
@@ -167,7 +215,7 @@ describe("PUT /api/clips/:id", () => {
     srv.uiClients.add(fake);
     await fetch(`${base}/api/clips/${id}`, {
       method: "PUT",
-      headers: { "Content-Type": "application/json" },
+      headers: { "Content-Type": "application/json", ...AUTH },
       body: JSON.stringify({ text: "new value" }),
     });
     srv.uiClients.delete(fake);
@@ -183,13 +231,13 @@ describe("PUT /api/clips/:id", () => {
 describe("DELETE /api/clips/:id", () => {
   test("deletes an existing clip and returns {ok:true}", async () => {
     const id = seed({ text: "delete me", source: "M4" });
-    const res = await fetch(`${base}/api/clips/${id}`, { method: "DELETE" });
+    const res = await fetch(`${base}/api/clips/${id}`, { method: "DELETE", headers: AUTH });
     expect((await res.json()).ok).toBe(true);
     expect(db.all(99999).find((c) => c.id === id)).toBeUndefined();
   });
 
   test("returns {ok:false} for an unknown id", async () => {
-    const res = await fetch(`${base}/api/clips/nope`, { method: "DELETE" });
+    const res = await fetch(`${base}/api/clips/nope`, { method: "DELETE", headers: AUTH });
     expect((await res.json()).ok).toBe(false);
   });
 
@@ -197,7 +245,7 @@ describe("DELETE /api/clips/:id", () => {
     const id = seed({ text: "delete broadcast", source: "M4" });
     const fake = { readyState: 1, sent: [], send(m) { this.sent.push(m); } };
     srv.uiClients.add(fake);
-    await fetch(`${base}/api/clips/${id}`, { method: "DELETE" });
+    await fetch(`${base}/api/clips/${id}`, { method: "DELETE", headers: AUTH });
     srv.uiClients.delete(fake);
     const msg = fake.sent.map((m) => JSON.parse(m)).find((m) => m.type === "delete");
     expect(msg).toEqual({ type: "delete", id });
@@ -209,24 +257,29 @@ describe("POST /api/stickies", () => {
   test("returns {ok:false} for empty text", async () => {
     const res = await fetch(`${base}/api/stickies`, {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: { "Content-Type": "application/json", ...AUTH },
       body: JSON.stringify({ text: "" }),
     });
     expect((await res.json()).ok).toBe(false);
   });
 
-  test("returns {ok:false, error} when STICKIES_API_TOKEN is not set", async () => {
+  test("returns {ok:false, error} when STICKIES_API_TOKEN is not set and minting fails", async () => {
+    // Mock the mint endpoint to fail deterministically — bypass mode would
+    // otherwise hit whatever is actually listening on :4444 on this machine.
+    msw.use(http.post(`${STICKIES_BASE}/api/stickies/keys`, () =>
+      HttpResponse.json({ error: "no bootstrap secret" }, { status: 403 })
+    ));
     const saved = process.env.STICKIES_API_TOKEN;
     delete process.env.STICKIES_API_TOKEN; // route reads env at request time
     try {
       const res = await fetch(`${base}/api/stickies`, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: { "Content-Type": "application/json", ...AUTH },
         body: JSON.stringify({ text: "some note" }),
       });
       const j = await res.json();
       expect(j.ok).toBe(false);
-      expect(j.error).toContain("STICKIES_API_TOKEN");
+      expect(j.error).toContain("mint failed");
     } finally {
       process.env.STICKIES_API_TOKEN = saved;
     }
@@ -235,7 +288,7 @@ describe("POST /api/stickies", () => {
   test("returns {ok:true} when Stickies accepts the note (returns a note object)", async () => {
     const res = await fetch(`${base}/api/stickies`, {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: { "Content-Type": "application/json", ...AUTH },
       body: JSON.stringify({ text: "Title line\nbody content" }),
     });
     expect((await res.json()).ok).toBe(true);
@@ -245,7 +298,7 @@ describe("POST /api/stickies", () => {
     msw.use(http.post(`${STICKIES_BASE}/api/stickies/ext`, () => HttpResponse.json({})));
     const res = await fetch(`${base}/api/stickies`, {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: { "Content-Type": "application/json", ...AUTH },
       body: JSON.stringify({ text: "no note returned" }),
     });
     expect((await res.json()).ok).toBe(false);
@@ -257,14 +310,14 @@ describe("POST /api/stickies", () => {
     ));
     const res = await fetch(`${base}/api/stickies`, {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: { "Content-Type": "application/json", ...AUTH },
       body: JSON.stringify({ text: "server error path" }),
     });
     expect((await res.json()).ok).toBe(false);
   });
 });
 
-// ── GET /manifest.json ───────────────────────────────────────────────────────
+// ── GET /manifest.json — static asset, no auth ───────────────────────────────
 describe("GET /manifest.json", () => {
   test("returns the PWA manifest JSON", async () => {
     const res = await fetch(`${base}/manifest.json`);
@@ -276,7 +329,7 @@ describe("GET /manifest.json", () => {
   });
 });
 
-// ── GET /icon.svg ────────────────────────────────────────────────────────────
+// ── GET /icon.svg — static asset, no auth ────────────────────────────────────
 describe("GET /icon.svg", () => {
   test("returns an SVG image", async () => {
     const res = await fetch(`${base}/icon.svg`);
@@ -287,10 +340,21 @@ describe("GET /icon.svg", () => {
   });
 });
 
+// ── GET /client.js — static asset, no auth ───────────────────────────────────
+describe("GET /client.js", () => {
+  test("serves the extracted frontend script", async () => {
+    const res = await fetch(`${base}/client.js`);
+    expect(res.status).toBe(200);
+    const body = await res.text();
+    expect(body).toContain("function render");
+    expect(body).toContain("openModal");
+  });
+});
+
 // ── GET /api/qr ──────────────────────────────────────────────────────────────
 describe("GET /api/qr", () => {
   test("returns {url, ip, port}", async () => {
-    const res = await fetch(`${base}/api/qr`);
+    const res = await fetch(`${base}/api/qr`, { headers: AUTH });
     const j = await res.json();
     expect(j.port).toBe(cfg.port);
     expect(typeof j.ip).toBe("string");
@@ -300,14 +364,15 @@ describe("GET /api/qr", () => {
 
 // ── GET /api/setup ───────────────────────────────────────────────────────────
 describe("GET /api/setup", () => {
-  test("returns {status, thisMachine, peer, setup}", async () => {
-    const res = await fetch(`${base}/api/setup`);
+  test("returns {status, thisMachine, peer, setup} WITHOUT leaking the token", async () => {
+    const res = await fetch(`${base}/api/setup`, { headers: AUTH });
     const j = await res.json();
     expect(["connected", "disconnected"]).toContain(j.status);
     expect(j.thisMachine.name).toBe(cfg.name);
     expect(j.peer.addr).toBe(cfg.peer);
     expect(j.setup).toHaveProperty("instructions");
-    expect(j.setup.env.CLIP_TOKEN).toBe(cfg.token);
+    expect(j.setup.env.CLIP_TOKEN).toBeUndefined();
+    expect(JSON.stringify(j)).not.toContain(cfg.token);
   });
 });
 
@@ -316,7 +381,7 @@ describe("POST /api/dedup", () => {
   test("returns {ok, removed:0, cleaned:0, deduped:0} when there is nothing to remove", async () => {
     seed({ text: "unique dedup one", source: "M4" });
     seed({ text: "unique dedup two", source: "M4" });
-    const res = await fetch(`${base}/api/dedup`, { method: "POST" });
+    const res = await fetch(`${base}/api/dedup`, { method: "POST", headers: AUTH });
     const j = await res.json();
     expect(j.ok).toBe(true);
     expect(j.removed).toBe(0);
@@ -329,7 +394,7 @@ describe("POST /api/dedup", () => {
     const h = require("../../src/clipboard").hash(text).slice(0, 12);
     seed({ text, hash: h, source: "M4", id: "dup-a", time: "2024-01-01T00:00:00.000Z" });
     seed({ text, hash: h, source: "M4", id: "dup-b", time: "2024-01-02T00:00:00.000Z" });
-    const res = await fetch(`${base}/api/dedup`, { method: "POST" });
+    const res = await fetch(`${base}/api/dedup`, { method: "POST", headers: AUTH });
     const j = await res.json();
     expect(j.ok).toBe(true);
     expect(j.removed).toBeGreaterThanOrEqual(1);
@@ -344,7 +409,7 @@ describe("POST /api/dedup", () => {
     seed({ text, hash: h, source: "M4", id: "db-b", time: "2024-01-02T00:00:00.000Z" });
     const fake = { readyState: 1, sent: [], send(m) { this.sent.push(m); } };
     srv.uiClients.add(fake);
-    await fetch(`${base}/api/dedup`, { method: "POST" });
+    await fetch(`${base}/api/dedup`, { method: "POST", headers: AUTH });
     srv.uiClients.delete(fake);
     const msg = fake.sent.map((m) => JSON.parse(m)).find((m) => m.type === "dedup");
     expect(msg).toBeDefined();
@@ -355,7 +420,7 @@ describe("POST /api/dedup", () => {
     seed({ text: "lonely clip", source: "M4" });
     const fake = { readyState: 1, sent: [], send(m) { this.sent.push(m); } };
     srv.uiClients.add(fake);
-    await fetch(`${base}/api/dedup`, { method: "POST" });
+    await fetch(`${base}/api/dedup`, { method: "POST", headers: AUTH });
     srv.uiClients.delete(fake);
     const msg = fake.sent.map((m) => JSON.parse(m)).find((m) => m.type === "dedup");
     expect(msg).toBeUndefined();
@@ -398,8 +463,19 @@ describe("WebSocket upgrade", () => {
     }
   });
 
-  test("/ui accepts the connection and sends an initial {type:'state'} message", async () => {
+  test("/ui without a token is rejected (connection fails/closes)", async () => {
     const ws = track(new WS(`ws://127.0.0.1:${port}/ui`));
+    const result = await new Promise((resolve) => {
+      const t = setTimeout(() => resolve("no-open"), 4000);
+      ws.on("open", () => { clearTimeout(t); resolve("opened"); });
+      ws.on("error", () => { clearTimeout(t); resolve("error"); });
+      ws.on("unexpected-response", () => { clearTimeout(t); resolve("unexpected-response"); });
+    });
+    expect(result).not.toBe("opened");
+  });
+
+  test("/ui with the correct token accepts the connection and sends an initial {type:'state'} message", async () => {
+    const ws = track(new WS(`ws://127.0.0.1:${port}/ui?token=${cfg.token}`));
     const msg = await new Promise((resolve, reject) => {
       const t = setTimeout(() => reject(new Error("timeout waiting for state")), 4000);
       ws.on("message", (data) => { clearTimeout(t); resolve(JSON.parse(data.toString())); });
@@ -411,7 +487,7 @@ describe("WebSocket upgrade", () => {
   });
 
   test("/ui registers the socket in uiClients and removes it on close", async () => {
-    const ws = track(new WS(`ws://127.0.0.1:${port}/ui`));
+    const ws = track(new WS(`ws://127.0.0.1:${port}/ui?token=${cfg.token}`));
     await new Promise((resolve, reject) => {
       const t = setTimeout(() => reject(new Error("timeout open")), 4000);
       ws.on("open", () => { clearTimeout(t); resolve(); });
@@ -458,5 +534,49 @@ describe("WebSocket upgrade", () => {
       ws.on("close", () => { clearTimeout(t); resolve("closed"); });
     });
     expect(result).not.toBe("opened");
+  });
+
+  test("/ui with a malformed percent-encoded cookie does not crash the server (rejected, not a 500/hang)", async () => {
+    // decodeURIComponent("%") throws — auth.js's cookieToken must swallow it,
+    // not let it escape the pre-auth upgrade handler and kill the process.
+    const ws = track(new WS(`ws://127.0.0.1:${port}/ui`, { headers: { Cookie: "clip_token=%" } }));
+    const result = await new Promise((resolve) => {
+      const t = setTimeout(() => resolve("no-open"), 4000);
+      ws.on("open", () => { clearTimeout(t); resolve("opened"); });
+      ws.on("error", () => { clearTimeout(t); resolve("error"); });
+      ws.on("unexpected-response", () => { clearTimeout(t); resolve("unexpected-response"); });
+    });
+    expect(result).not.toBe("opened"); // treated as unauthenticated, not a crash
+
+    // The server must still be alive and answering afterward.
+    const res = await fetch(`${base}/status`);
+    expect(res.status).toBe(200);
+  });
+
+  test("a raw upgrade request with a malformed Host header does not crash the server", async () => {
+    // `new URL(req.url, "http://" + req.headers.host)` throws on a bad Host -
+    // this must be caught, not left to kill the whole process.
+    const net = require("net");
+    const result = await new Promise((resolve, reject) => {
+      const socket = net.connect(port, "127.0.0.1", () => {
+        socket.write(
+          "GET /ui HTTP/1.1\r\n" +
+          "Host: [not a valid host\r\n" +
+          "Connection: Upgrade\r\n" +
+          "Upgrade: websocket\r\n" +
+          "Sec-WebSocket-Version: 13\r\n" +
+          "Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n" +
+          "\r\n"
+        );
+      });
+      const t = setTimeout(() => { socket.destroy(); resolve("timeout"); }, 4000);
+      socket.on("close", () => { clearTimeout(t); resolve("closed"); });
+      socket.on("error", () => { clearTimeout(t); resolve("closed"); });
+    });
+    expect(result).toBe("closed"); // socket destroyed, not left hanging or crashing the process
+
+    // The server must still be alive and answering afterward.
+    const res = await fetch(`${base}/status`);
+    expect(res.status).toBe(200);
   });
 });

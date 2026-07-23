@@ -1,9 +1,13 @@
 // ── SQLite persistence for Clip history ──────────────────────────────────────
 const Database = require("better-sqlite3");
+const fs = require("fs");
 const path = require("path");
+
+const HISTORY_CAP = 500;
 
 const dbPath = process.env.CLIP_DB_PATH || path.join(__dirname, "..", "clip.db");
 const db = new Database(dbPath);
+try { fs.chmodSync(dbPath, 0o600); } catch {}
 
 db.pragma("journal_mode = WAL");
 db.exec(`
@@ -17,6 +21,7 @@ db.exec(`
     time      TEXT NOT NULL
   );
   CREATE INDEX IF NOT EXISTS idx_clips_time ON clips(time DESC);
+  CREATE INDEX IF NOT EXISTS idx_clips_hash ON clips(hash);
 `);
 
 const stmts = {
@@ -27,12 +32,12 @@ const stmts = {
   update: db.prepare(`UPDATE clips SET text = ?, preview = ?, length = ? WHERE id = ?`),
   count: db.prepare(`SELECT COUNT(*) as total FROM clips`),
   prune: db.prepare(`DELETE FROM clips WHERE id NOT IN (SELECT id FROM clips ORDER BY time DESC LIMIT ?)`),
+  findByHash: db.prepare(`SELECT * FROM clips WHERE hash = ? ORDER BY time DESC LIMIT 1`),
 };
 
 function add(clip) {
   stmts.insert.run(clip);
-  // Keep max 500
-  stmts.prune.run(500);
+  stmts.prune.run(HISTORY_CAP);
 }
 
 function all(limit = 100) {
@@ -55,9 +60,15 @@ function update(id, text) {
   return stmts.update.run(text, text.slice(0, 2000), text.length, id).changes > 0;
 }
 
+// Indexed hash lookup, used on the write-time dedup hot path instead of pulling
+// the whole capped table into JS.
+function findByHash(hash) {
+  return stmts.findByHash.get(hash);
+}
+
 function dedup() {
   const dupeSet = new Set();
-  const rows = stmts.all.all(9999);
+  const rows = stmts.all.all(HISTORY_CAP + 1);
   // Hash-based dedup
   const seenHash = new Set();
   for (const r of rows) {
@@ -83,7 +94,7 @@ function dedup() {
 }
 
 function cleanup() {
-  const rows = stmts.all.all(9999);
+  const rows = stmts.all.all(HISTORY_CAP + 1);
   let removed = 0;
   for (const r of rows) {
     const qCount = (r.text.match(/\?/g) || []).length;
@@ -98,4 +109,4 @@ function cleanup() {
   return removed;
 }
 
-module.exports = { add, all, search, remove, update, count, dedup, cleanup };
+module.exports = { add, all, search, remove, update, count, dedup, cleanup, findByHash, HISTORY_CAP };

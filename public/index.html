@@ -1,0 +1,224 @@
+<!DOCTYPE html>
+<html lang="en"><head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="Clip">
+<meta name="theme-color" content="#020203">
+<link rel="icon" href="/icon.svg" type="image/svg+xml">
+<link rel="apple-touch-icon" href="/icon.svg">
+<link rel="manifest" href="/manifest.json">
+<title>Clip</title>
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+::-webkit-scrollbar{width:4px;height:4px}
+::-webkit-scrollbar-track{background:transparent}
+::-webkit-scrollbar-thumb{background:rgba(255,255,255,.1);border-radius:4px}
+::-webkit-scrollbar-thumb:hover{background:rgba(255,255,255,.2)}
+body{font-family:-apple-system,BlinkMacSystemFont,"SF Pro Text",system-ui,sans-serif;background:#020203;color:#e5e5e5;min-height:100vh;overflow-x:hidden;-webkit-text-size-adjust:100%;touch-action:manipulation}
+.root{min-height:100vh;background:#020203;transition:background .4s}
+:focus-visible{outline:2px solid var(--pc,#3b82f6);outline-offset:2px;border-radius:6px}
+
+/* Flash + confetti */
+@keyframes flashBorder{0%{opacity:0}15%{opacity:1}100%{opacity:0}}
+@keyframes fadeInUp{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:translateY(0)}}
+@keyframes slideIn{from{opacity:0;transform:translateX(-12px)}to{opacity:1;transform:translateX(0)}}
+@keyframes slideInNew{0%{opacity:0;transform:translate(40px,40px) scale(.85)}60%{opacity:1;transform:translate(-4px,-4px) scale(1.02)}100%{opacity:1;transform:translate(0,0) scale(1)}}
+@keyframes cardPageIn{0%{opacity:0;transform:scale(.7) translateY(30px) rotate(-3deg)}50%{opacity:1;transform:scale(1.03) translateY(-4px) rotate(0deg)}100%{opacity:1;transform:scale(1) translateY(0) rotate(0deg)}}
+.clip.page-in{animation:cardPageIn .5s cubic-bezier(.34,1.56,.64,1) both}
+@keyframes blink2{0%,100%{border-color:var(--page-color-blink);box-shadow:0 0 16px var(--page-color-blink-glow)}50%{border-color:transparent;box-shadow:none}}
+@keyframes delRed{0%{background:rgba(220,38,38,.3);border-color:rgba(220,38,38,.6);box-shadow:0 0 20px rgba(220,38,38,.3)}50%{background:rgba(220,38,38,.1);border-color:rgba(220,38,38,.3);box-shadow:0 0 8px rgba(220,38,38,.1)}100%{background:rgba(220,38,38,.3);border-color:rgba(220,38,38,.6);box-shadow:0 0 20px rgba(220,38,38,.3)}}
+@keyframes delFade{0%{opacity:1;transform:scale(1)}100%{opacity:0;transform:scale(.85)}}
+@keyframes spin{to{transform:rotate(360deg)}}
+.spin{animation:spin .7s linear infinite}
+#flash{position:fixed;inset:0;z-index:9990;pointer-events:none;border:8px solid #2563eb;box-shadow:inset 0 0 40px rgba(37,99,235,.25);display:none}
+#flash.on{display:block;animation:flashBorder .7s ease-in-out}
+#confetti{position:fixed;inset:0;z-index:9991;pointer-events:none;display:none}
+
+/* Layout */
+.container{max-width:960px;margin:0 auto;padding:20px 16px}
+.header{display:flex;align-items:center;justify-content:space-between;margin-bottom:16px;gap:12px}
+.logo{display:flex;align-items:center;gap:8px;font-size:18px;font-weight:700;color:#fff}
+.logo .dot{width:8px;height:8px;border-radius:50%;flex-shrink:0}
+.logo .dot.on{background:#22c55e;box-shadow:0 0 8px rgba(34,197,94,.5)}
+.logo .dot.off{background:#ef4444}
+.logo-stroke{stroke-dasharray:200;stroke-dashoffset:200;animation:draw 1.5s ease forwards}
+.logo-stroke.s1{animation-delay:0s}
+.logo-stroke.s2{animation-delay:.3s}
+.logo-stroke.s3{animation-delay:.6s}
+.logo-stroke.s4{animation-delay:.8s}
+@keyframes draw{to{stroke-dashoffset:0}}
+.qr-btn{width:36px;height:36px;border-radius:8px;border:1px solid rgba(255,255,255,.08);background:rgba(255,255,255,.04);cursor:pointer;display:flex;align-items:center;justify-content:center;transition:all .15s}
+.qr-btn:hover{background:rgba(255,255,255,.1)}
+.qr-btn img{width:28px;height:28px;border-radius:4px;opacity:.6}
+.qr-btn:hover img{opacity:1}
+
+/* Status bar */
+.status{display:flex;gap:12px;flex-wrap:wrap;margin-bottom:16px;font-size:11px;color:rgba(255,255,255,.35)}
+.status span{display:flex;align-items:center;gap:4px}
+.status .val{color:rgba(255,255,255,.6);font-family:monospace}
+
+/* Search modal (Cmd+K) */
+.search-modal{display:none;position:fixed;inset:0;z-index:9998;background:rgba(0,0,0,.85);backdrop-filter:blur(8px);align-items:flex-start;justify-content:center;padding:80px 20px 20px}
+.search-modal.show{display:flex}
+.search-modal-inner{background:rgba(10,10,14,.95);border:1px solid rgba(255,255,255,.1);border-radius:16px;max-width:560px;width:100%;max-height:70vh;display:flex;flex-direction:column;overflow:hidden}
+.search-modal-input{width:100%;padding:14px 16px;border:none;border-bottom:1px solid rgba(255,255,255,.06);background:transparent;color:#fff;font-size:15px;font-family:inherit}
+.search-modal-input::placeholder{color:rgba(255,255,255,.2)}
+.search-modal-results{overflow-y:auto;flex:1;padding:4px}
+.search-modal-item{padding:10px 14px;border-radius:10px;cursor:pointer;font-size:12px;color:rgba(255,255,255,.6);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;transition:background .1s}
+.search-modal-item:hover,.search-modal-item.active{background:rgba(59,130,246,.15);color:#fff}
+.search-modal-item .sk-time{float:right;font-size:9px;color:rgba(255,255,255,.2);margin-left:12px}
+.search-modal-hint{padding:12px 16px;font-size:10px;color:rgba(255,255,255,.15);text-align:center;border-top:1px solid rgba(255,255,255,.04)}
+
+/* Clip grid */
+.list{display:grid;grid-template-columns:repeat(3,1fr);gap:10px}
+@media(max-width:700px){.list{grid-template-columns:repeat(2,1fr)}}
+@media(max-width:480px){.list{grid-template-columns:1fr}}
+.clip{padding:16px;border-radius:14px;display:flex;flex-direction:column;height:280px;background:transparent;backdrop-filter:blur(10px);border:1px solid transparent;cursor:pointer;transition:all .2s;animation:fadeInUp .3s ease;box-shadow:0 2px 8px rgba(0,0,0,.2);position:relative;overflow:hidden}
+.clip.m-local{border-color:var(--page-color-border,rgba(255,255,255,.1))}
+.clip.m-peer{border-color:var(--page-color-border,rgba(255,255,255,.15))}
+.clip:hover{background:var(--page-color-hover,rgba(255,255,255,.06))!important;box-shadow:0 4px 20px var(--page-color-shadow,rgba(0,0,0,.3))}
+.clip.new{animation:slideInNew .5s cubic-bezier(.34,1.56,.64,1)}
+.clip.blink{animation:blink2 .4s ease 2}
+.clip.del-red{animation:delRed .5s ease 1;background:rgba(220,38,38,.3)!important;border-color:rgba(220,38,38,.6)!important;box-shadow:0 0 20px rgba(220,38,38,.3)!important;pointer-events:none}
+.clip.del-fade{animation:delFade .5s ease forwards;pointer-events:none}
+.clip .meta{display:flex;align-items:center;justify-content:flex-end;position:absolute;top:8px;right:8px;z-index:1}
+.clip .source{font-size:10px;font-weight:600;text-transform:uppercase;letter-spacing:.05em;display:flex;align-items:center;gap:4px}
+.clip .source.local{color:rgba(255,255,255,.55)}
+.clip .source.peer{color:rgba(59,130,246,.7)}
+
+.clip .time{font-size:8px;color:rgba(255,255,255,.18);position:absolute;bottom:8px;right:10px}
+.clip .text{font-size:12px;color:rgba(255,255,255,.7);line-height:1.4;word-break:break-all;white-space:pre-wrap;font-family:ui-monospace,"SF Mono",Menlo,monospace;overflow:hidden;flex:1;padding-right:4px}
+.clip .text mark{background:rgba(250,204,21,.25);color:#fde047;border-radius:2px;padding:0 1px}
+.clip.copied{border-color:rgba(34,197,94,.5)!important;box-shadow:0 0 12px rgba(34,197,94,.15)!important}
+.clip-actions{display:flex;gap:4px;opacity:0;transition:opacity .15s}
+.clip:hover .clip-actions,.clip:focus-within .clip-actions{opacity:1}
+.act-btn{width:26px;height:26px;border-radius:50%;border:1px solid rgba(255,255,255,.1);background:rgba(255,255,255,.05);color:rgba(255,255,255,.4);cursor:pointer;display:flex;align-items:center;justify-content:center;transition:all .15s;flex-shrink:0}
+.act-btn:hover{background:rgba(255,255,255,.15);color:#fff}
+.act-btn.del:hover{background:rgba(220,38,38,.3);color:#f87171;border-color:rgba(220,38,38,.4)}
+.act-btn.heart{color:rgba(255,255,255,.25)}
+.act-btn.heart.liked{color:#f472b6;border-color:rgba(244,114,182,.3);background:rgba(244,114,182,.1)}
+.act-btn svg{width:12px;height:12px}
+.act-btn{border-color:var(--page-color-border,rgba(255,255,255,.1))}
+.act-btn:hover{background:var(--page-color-hover,rgba(255,255,255,.15));color:var(--pc,#fff)}
+.pag-row{position:fixed;bottom:0;left:0;right:0;display:flex;align-items:center;justify-content:center;gap:8px;padding:14px 0;background:rgba(2,2,3,.85);backdrop-filter:blur(12px);border-top:1px solid rgba(255,255,255,.04);z-index:100}
+
+/* Empty / loading / error */
+.empty{text-align:center;padding:60px 20px;color:rgba(255,255,255,.15)}
+.empty svg{margin-bottom:12px;opacity:.3}
+.empty p{font-size:12px;letter-spacing:.1em;text-transform:uppercase}
+.empty.is-error{color:rgba(248,113,113,.6)}
+.empty .retry{margin-top:12px;padding:8px 16px;border-radius:8px;border:1px solid rgba(248,113,113,.3);background:rgba(248,113,113,.1);color:#f87171;font-size:11px;cursor:pointer}
+
+/* Toast — Dynamic Island style from Stickies */
+@keyframes islandToastInOut{0%{opacity:0;transform:translateX(-50%) translateY(-8px) scale(.72)}14%{opacity:1;transform:translateX(-50%) translateY(0) scale(1)}82%{opacity:1;transform:translateX(-50%) translateY(0) scale(1)}100%{opacity:0;transform:translateX(-50%) translateY(-6px) scale(.78)}}
+@keyframes confettiShoot{0%{transform:translate(0,0) scale(0);opacity:1}60%{transform:translate(var(--cx),var(--cy)) scale(1);opacity:1}100%{transform:translate(var(--cx),var(--cy)) scale(0);opacity:0}}
+.toast{position:fixed;top:calc(env(safe-area-inset-top, 0px) + 14px);left:50%;transform:translateX(-50%);z-index:99999;pointer-events:none;display:none}
+.toast.show{display:flex;animation:islandToastInOut 3s cubic-bezier(.16,1,.3,1) forwards}
+.toast-pill{display:inline-flex;align-items:center;gap:6px;padding:5px 14px 5px 6px;border-radius:999px;font-size:11px;font-weight:700;letter-spacing:.01em;color:#fff;white-space:nowrap;position:relative}
+.toast-icon{width:22px;height:22px;border-radius:50%;background:rgba(0,0,0,.15);display:flex;align-items:center;justify-content:center;flex-shrink:0}
+.toast-icon svg{width:12px;height:12px}
+.toast .confetti-dot{position:absolute;top:50%;left:50%;width:3px;height:3px;border-radius:1px;pointer-events:none;animation:confettiShoot 1.2s cubic-bezier(.2,1,.3,1) forwards}
+
+/* QR modal */
+.qr-overlay{display:none;position:fixed;inset:0;z-index:9998;background:rgba(0,0,0,.88);backdrop-filter:blur(12px);align-items:center;justify-content:center;flex-direction:column;gap:16px}
+.qr-overlay.show{display:flex}
+.qr-overlay img{width:220px;height:220px;background:#fff;padding:20px;border-radius:24px;box-shadow:0 0 80px rgba(255,255,255,.2),0 0 160px rgba(255,255,255,.08)}
+.qr-overlay .url-row{display:flex;align-items:center;gap:8px;margin-top:4px}
+.qr-overlay p{font-size:12px;color:rgba(255,255,255,.45);font-family:monospace;background:rgba(255,255,255,.06);padding:6px 14px;border-radius:8px}
+.qr-overlay .copy-url{width:32px;height:32px;border-radius:8px;border:1px solid rgba(255,255,255,.15);background:rgba(255,255,255,.06);color:rgba(255,255,255,.5);cursor:pointer;display:flex;align-items:center;justify-content:center;transition:all .15s}
+.qr-overlay .copy-url:hover{background:rgba(255,255,255,.15);color:#fff}
+.qr-overlay small{font-size:10px;color:rgba(255,255,255,.25);cursor:pointer;margin-top:4px}
+
+/* Clip modal */
+.clip-modal{display:none;position:fixed;inset:0;z-index:9997;background:rgba(0,0,0,.85);backdrop-filter:blur(8px);align-items:center;justify-content:center;padding:20px}
+.clip-modal.show{display:flex}
+.clip-modal-inner{background:rgba(10,10,14,.95);border:1px solid rgba(255,255,255,.1);border-radius:16px;max-width:900px;width:100%;max-height:90vh;display:flex;flex-direction:column;overflow:hidden}
+.clip-modal-header{display:flex;align-items:center;justify-content:space-between;padding:12px 16px;border-bottom:1px solid rgba(255,255,255,.06)}
+.clip-modal-header .source{font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:.05em;display:flex;align-items:center;gap:5px}
+.clip-modal-header .time{font-size:10px;color:rgba(255,255,255,.25)}
+.clip-modal-body{padding:16px;overflow-y:auto;flex:1}
+.clip-modal-body textarea{font-size:11px;color:rgba(255,255,255,.7);line-height:1.6;white-space:pre-wrap;word-break:break-all;font-family:ui-monospace,"SF Mono",Menlo,monospace;margin:0;width:100%;min-height:280px;background:transparent;border:none;resize:vertical}
+.clip-modal-footer{display:flex;gap:8px;padding:12px 16px;border-top:1px solid rgba(255,255,255,.06)}
+.modal-btn{flex:1;padding:8px;border-radius:8px;border:none;font-size:12px;font-weight:600;cursor:pointer;transition:all .15s;display:flex;align-items:center;justify-content:center;gap:5px}
+.modal-btn.copy{background:rgba(59,130,246,.2);color:#60a5fa;border:1px solid rgba(59,130,246,.3)}
+.modal-btn.copy:hover{background:rgba(59,130,246,.35)}
+.modal-btn.close{background:rgba(255,255,255,.06);color:rgba(255,255,255,.5);border:1px solid rgba(255,255,255,.08)}
+.modal-btn.close:hover{background:rgba(255,255,255,.12)}
+</style>
+</head><body>
+<div id="flash"></div>
+<canvas id="confetti"></canvas>
+<div class="qr-overlay" id="qrOverlay" onclick="this.classList.remove('show')">
+  <img id="qrImg" src="" alt="QR code for the LAN URL of this Clip instance">
+  <div class="url-row">
+    <p id="qrUrl"></p>
+    <button class="copy-url" aria-label="Copy URL" onclick="event.stopPropagation();navigator.clipboard.writeText(document.getElementById('qrUrl').textContent).then(()=>toast('URL copied','green'))" title="Copy URL"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg></button>
+  </div>
+  <small>tap anywhere to close</small>
+</div>
+<div class="root">
+<div class="container">
+  <header class="header">
+    <div class="logo">
+      <svg class="logo-icon" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128" style="width:28px;height:28px;border-radius:6px" aria-hidden="true"><rect width="128" height="128" rx="28" fill="#0f172a"/><rect class="logo-stroke s1" x="30" y="28" width="42" height="52" rx="6" fill="none" stroke="#fff" stroke-width="4" opacity=".6"/><rect class="logo-stroke s2" x="56" y="48" width="42" height="52" rx="6" fill="none" stroke="#3b82f6" stroke-width="4"/><path class="logo-stroke s3" d="M72 60 L72 88" fill="none" stroke="#3b82f6" stroke-width="3" stroke-linecap="round" opacity=".5"/><path class="logo-stroke s4" d="M60 74 L84 74" fill="none" stroke="#3b82f6" stroke-width="3" stroke-linecap="round" opacity=".5"/></svg>
+      <span>Clip</span>
+      <span class="dot" id="peerDot"></span>
+      <span id="peerName" style="display:none"></span>
+    </div>
+    <div style="display:flex;align-items:center;gap:8px;font-size:10px;color:rgba(255,255,255,.3);letter-spacing:.02em">
+      <span title="This machine" style="display:flex;align-items:center;gap:4px"><svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><rect x="2" y="3" width="20" height="14" rx="2"/><path d="M8 21h8M12 17v4"/></svg> <span id="sLocalIp">-</span></span>
+      <span style="opacity:.3">|</span>
+      <span id="sPeerWrap" title="Peer machine" style="display:flex;align-items:center;gap:4px"><span class="dot" id="peerDot2" style="width:6px;height:6px"></span> <span id="sPeerIp">-</span></span>
+    </div>
+    <div style="display:flex;align-items:center;gap:6px">
+      <button class="qr-btn" aria-label="Search clips" onclick="openSearchModal()" title="Search (Cmd+K)">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="rgba(255,255,255,.5)" stroke-width="2" aria-hidden="true"><circle cx="11" cy="11" r="8"/><path d="M21 21l-4.35-4.35"/></svg>
+      </button>
+      <button class="qr-btn" aria-label="Remove duplicate clips" onclick="dedupClips()" title="Remove duplicates">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="rgba(255,255,255,.5)" stroke-width="2" aria-hidden="true"><path d="M3 6h18M8 6V4h8v2M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6"/><path d="M10 11v6M14 11v6"/></svg>
+      </button>
+      <button class="qr-btn" aria-label="Show QR code for this page" onclick="showQR()" title="QR Code">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="rgba(255,255,255,.5)" stroke-width="1.5" aria-hidden="true"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="3" height="3"/><line x1="21" y1="14" x2="21" y2="14.01"/><line x1="21" y1="21" x2="21" y2="21.01"/><line x1="14" y1="21" x2="14" y2="21.01"/></svg>
+      </button>
+    </div>
+  </header>
+
+  <div class="status" id="statusBar">
+    <span>Clips: <span class="val" id="sClips">0</span></span>
+  </div>
+
+  <main>
+    <div id="clipList" class="list" style="padding-bottom:60px"></div>
+    <div id="pagBar" class="pag-row" style="display:none"></div>
+    <div id="emptyState" class="empty">
+      <svg width="64" height="64" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width=".6" aria-hidden="true"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
+      <p id="emptyStateMsg">Copy something to get started</p>
+    </div>
+  </main>
+</div>
+</div>
+<div class="search-modal" id="searchModal" onclick="closeSearchModal()">
+  <div class="search-modal-inner" onclick="event.stopPropagation()">
+    <input type="text" class="search-modal-input" id="searchModalInput" aria-label="Search clips" placeholder="Search clips..." oninput="onSearchModal(this.value)" onkeydown="searchModalKey(event)">
+    <div class="search-modal-results" id="searchModalResults"></div>
+    <div class="search-modal-hint">↑↓ navigate · Enter open · Esc close</div>
+  </div>
+</div>
+<div class="clip-modal" id="clipModal" onclick="closeModal()">
+  <div class="clip-modal-inner" onclick="event.stopPropagation()">
+    <div class="clip-modal-header"><span class="source" id="modalSource"></span><span class="time" id="modalTime"></span></div>
+    <div class="clip-modal-body"><textarea id="modalText" aria-label="Clip text"></textarea></div>
+    <div class="clip-modal-footer">
+      <button class="modal-btn" id="modalOpen" aria-label="Open link" title="Open link" style="display:none;background:rgba(34,197,94,.15);color:#4ade80;border:1px solid rgba(34,197,94,.25)"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6M15 3h6v6M10 14L21 3"/></svg></button>
+      <button class="modal-btn" aria-label="Save edits" onclick="modalSave()" title="Save edits" style="background:rgba(139,92,246,.15);color:#a78bfa;border:1px solid rgba(139,92,246,.25)"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/><path d="M17 21v-8H7v8M7 3v5h8"/></svg></button>
+      <button class="modal-btn copy" aria-label="Copy" onclick="modalCopy()" title="Copy"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg></button>
+      <button class="modal-btn" id="modalStickies" aria-label="Send to Stickies" onclick="sendToStickies()" title="Send to Stickies" style="display:none;background:rgba(255,179,0,.12);color:#FFB300;border:1px solid rgba(255,179,0,.25)"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M12 8v8M8 12h8"/></svg></button>
+      <button class="modal-btn" id="modalHeart" aria-label="Favorite" onclick="toggleModalHeart()" title="Favorite" style="background:rgba(244,114,182,.1);color:#f472b6;border:1px solid rgba(244,114,182,.2)"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z"/></svg></button>
+      <button class="modal-btn" aria-label="Delete" onclick="modalDelete()" title="Delete" style="background:rgba(239,68,68,.12);color:#ef4444;border:1px solid rgba(239,68,68,.25)"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M3 6h18M8 6V4h8v2M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6"/></svg></button>
+    </div>
+  </div>
+</div>
+<div class="toast" id="toast" role="status" aria-live="polite"><div class="toast-pill" id="toastPill"><span class="toast-icon" id="toastIcon"></span><span id="toastMsg"></span></div></div>
+<script src="/client.js"></script>
+</body></html>

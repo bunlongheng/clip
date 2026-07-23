@@ -1,6 +1,6 @@
-// ── Unit tests — src/clipboard.js (read/write via stubbed execSync, hash) ──
-// clipstub patches child_process.execSync and MUST be required before
-// src/clipboard, which destructures execSync at load time. This keeps the
+// ── Unit tests — src/clipboard.js (async read/write via stubbed execFile, hash) ──
+// clipstub patches child_process.execFile and MUST be required before
+// src/clipboard, which destructures execFile at load time. This keeps the
 // read/write tests deterministic (no subprocess timeout flakiness under load).
 const clipstub = require("../helpers/clipstub");
 const clip = require("../../src/clipboard");
@@ -12,51 +12,51 @@ beforeEach(() => {
 afterEach(() => bin.restore());
 
 describe("read()", () => {
-  test("returns clipboard text", () => {
+  test("returns clipboard text", async () => {
     bin.setClipboard("hello");
-    expect(clip.read()).toBe("hello");
+    expect(await clip.read()).toBe("hello");
   });
 
-  test("returns '' when pbpaste fails", () => {
+  test("returns '' when pbpaste fails", async () => {
     bin.setFail(true);
-    expect(clip.read()).toBe("");
+    expect(await clip.read()).toBe("");
   });
 
-  test("reads multi-line + unicode content verbatim", () => {
+  test("reads multi-line + unicode content verbatim", async () => {
     const payload = "line1\nline2\nαβγ 🚀";
     bin.setClipboard(payload);
-    expect(clip.read()).toBe(payload);
+    expect(await clip.read()).toBe(payload);
   });
 
-  test("reads empty clipboard as empty string", () => {
+  test("reads empty clipboard as empty string", async () => {
     bin.setClipboard("");
-    expect(clip.read()).toBe("");
+    expect(await clip.read()).toBe("");
   });
 });
 
 describe("write()", () => {
-  test("pipes text to pbcopy", () => {
-    clip.write("xyz");
+  test("pipes text to pbcopy", async () => {
+    await clip.write("xyz");
     expect(bin.getWritten()).toBe("xyz");
   });
 
-  test("round-trips multi-line + unicode text", () => {
+  test("round-trips multi-line + unicode text", async () => {
     const payload = "héllo\nworld\n😀✅";
-    clip.write(payload);
+    await clip.write(payload);
     expect(bin.getWritten()).toBe(payload);
   });
 
-  test("swallows errors when pbcopy fails (never throws, never writes)", () => {
+  test("swallows errors when pbcopy fails (never throws, never writes)", async () => {
     bin.setFail(true);
-    expect(() => clip.write("nope")).not.toThrow();
-    expect(bin.getWritten()).toBe(null); // execSync threw before the write was recorded
+    await expect(clip.write("nope")).resolves.not.toThrow();
+    expect(bin.getWritten()).toBe(null); // execFile failed before the write was recorded
   });
 
-  test("written content is readable back through read()", () => {
+  test("written content is readable back through read()", async () => {
     // mirror what write() captured into the read side, then read it back
-    clip.write("round-trip");
+    await clip.write("round-trip");
     bin.setClipboard(bin.getWritten());
-    expect(clip.read()).toBe("round-trip");
+    expect(await clip.read()).toBe("round-trip");
   });
 });
 

@@ -1,19 +1,27 @@
 // ── Clipboard — read/write via macOS pbpaste/pbcopy ─────────────────────────
-const { execSync } = require("child_process");
+const { execFile } = require("child_process");
+const { promisify } = require("util");
 const crypto = require("crypto");
 
-function read() {
+const execFileAsync = promisify(execFile);
+const OPTS = { encoding: "utf8", timeout: 2000, env: { ...process.env, LANG: "en_US.UTF-8" } };
+
+async function read() {
   try {
-    return execSync("pbpaste", { encoding: "utf8", timeout: 2000, env: { ...process.env, LANG: "en_US.UTF-8" } });
-  } catch {
+    const { stdout } = await execFileAsync("pbpaste", [], OPTS);
+    return stdout;
+  } catch (e) {
+    console.error("[clip] pbpaste failed:", e.message);
     return "";
   }
 }
 
-function write(text) {
+async function write(text) {
   try {
-    execSync("pbcopy", { input: text, encoding: "utf8", timeout: 2000, env: { ...process.env, LANG: "en_US.UTF-8" } });
-  } catch {}
+    await execFileAsync("pbcopy", [], { ...OPTS, input: text });
+  } catch (e) {
+    console.error("[clip] pbcopy failed:", e.message);
+  }
 }
 
 function hash(text) {
