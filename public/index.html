@@ -221,4 +221,5 @@ body{font-family:-apple-system,BlinkMacSystemFont,"SF Pro Text",system-ui,sans-s
 </div>
 <div class="toast" id="toast" role="status" aria-live="polite"><div class="toast-pill" id="toastPill"><span class="toast-icon" id="toastIcon"></span><span id="toastMsg"></span></div></div>
 <script src="/client.js"></script>
+<script>if("serviceWorker" in navigator){window.addEventListener("load",function(){navigator.serviceWorker.register("sw.js").catch(function(){});});}</script>
 </body></html>
