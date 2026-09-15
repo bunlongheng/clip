@@ -50,24 +50,66 @@ async function poll() {
   }
 }
 
+// Give up on a discovered address after this many dials that never opened, so a
+// stale Bonjour record can't pin us to a machine that is no longer listening.
+const DIAL_FAILURE_LIMIT = 5;
+let releaseDiscovered = null;
+let dialFailures = 0;
+
+function setDiscoveryRelease(fn) { releaseDiscovered = fn; }
+
+// Returns true if the dead address was released (caller must not retry it).
+function abandonDeadPeer() {
+  if (cfg.peerLocked || dialFailures < DIAL_FAILURE_LIMIT) return false;
+  log(`Peer ${cfg.peer} never answered after ${dialFailures} tries - looking for another`);
+  cfg.peer = "";
+  dialFailures = 0;
+  if (releaseDiscovered) releaseDiscovered();
+  return true;
+}
+
 function connectToPeer() {
   if (!cfg.peer) return;
   if (state.peerWs && state.peerWs.readyState === WebSocket.OPEN) return;
 
   try {
+    let opened = false;
     const ws = new WebSocket(`ws://${cfg.peer}/ws?token=${cfg.token}`);
     ws.on("open", () => {
+      opened = true;
+      dialFailures = 0;
       log("Connected to peer (outgoing)");
       handlePeer(ws);
     });
     ws.on("error", () => {});
     ws.on("close", () => {
       if (state.peerWs === ws) { state.peerWs = null; state.peerConnected = false; broadcastToUI({ type: "peer", connected: false }); }
-      setTimeout(connectToPeer, 3000);
+      if (!opened) dialFailures++;
+      if (abandonDeadPeer()) return;
+      setTimeout(connectToPeer, 3000).unref();
     });
   } catch {
-    setTimeout(connectToPeer, 3000);
+    dialFailures++;
+    if (abandonDeadPeer()) return;
+    setTimeout(connectToPeer, 3000).unref();
   }
+}
+
+// Called by Bonjour discovery. Both machines see each other at once, so the
+// lexicographically smaller name dials immediately and the other waits — by
+// then it already has the incoming socket and connectToPeer() no-ops.
+function adoptPeer(addr, instance) {
+  if (cfg.peerLocked || cfg.peer === addr) return;
+  cfg.peer = addr;
+  log(`Discovered peer ${instance} at ${addr}`);
+  setTimeout(connectToPeer, cfg.name < instance ? 0 : 3000).unref();
+}
+
+function dropPeer(instance) {
+  if (cfg.peerLocked) return;
+  log(`Peer ${instance} went away`);
+  cfg.peer = "";
+  if (state.peerWs) state.peerWs.close();
 }
 
 function handlePeer(ws) {
@@ -155,4 +197,4 @@ function attachUpgradeHandler(server, getLanIp) {
   });
 }
 
-module.exports = { state, poll, connectToPeer, handlePeer, attachUpgradeHandler, log, wss };
+module.exports = { state, poll, connectToPeer, handlePeer, adoptPeer, dropPeer, setDiscoveryRelease, attachUpgradeHandler, log, wss };

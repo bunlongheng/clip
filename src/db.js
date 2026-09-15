@@ -3,7 +3,11 @@ const Database = require("better-sqlite3");
 const fs = require("fs");
 const path = require("path");
 
-const HISTORY_CAP = 500;
+// How many clips to keep, and how long to keep them. Both are env-tunable so a
+// long-running daemon can be pinned to a tiny rolling window instead of a
+// 500-deep archive. CLIP_MAX_AGE_HOURS=0 (the default) disables age expiry.
+const HISTORY_CAP = Math.max(1, parseInt(process.env.CLIP_HISTORY_CAP || "500", 10) || 500);
+const MAX_AGE_MS = Math.max(0, parseInt(process.env.CLIP_MAX_AGE_HOURS || "0", 10) || 0) * 3600000;
 
 const dbPath = process.env.CLIP_DB_PATH || path.join(__dirname, "..", "clip.db");
 const db = new Database(dbPath);
@@ -33,11 +37,21 @@ const stmts = {
   count: db.prepare(`SELECT COUNT(*) as total FROM clips`),
   prune: db.prepare(`DELETE FROM clips WHERE id NOT IN (SELECT id FROM clips ORDER BY time DESC LIMIT ?)`),
   findByHash: db.prepare(`SELECT * FROM clips WHERE hash = ? ORDER BY time DESC LIMIT 1`),
+  pruneByAge: db.prepare(`DELETE FROM clips WHERE time < ?`),
 };
 
 function add(clip) {
   stmts.insert.run(clip);
   stmts.prune.run(HISTORY_CAP);
+  pruneExpired();
+}
+
+// Drop clips past CLIP_MAX_AGE_HOURS. `time` is an ISO-8601 string, so a plain
+// string comparison is a correct chronological one. No-op when expiry is off.
+// Called on every write and on a timer, so history still clears while idle.
+function pruneExpired() {
+  if (!MAX_AGE_MS) return 0;
+  return stmts.pruneByAge.run(new Date(Date.now() - MAX_AGE_MS).toISOString()).changes;
 }
 
 function all(limit = 100) {
@@ -109,4 +123,4 @@ function cleanup() {
   return removed;
 }
 
-module.exports = { add, all, search, remove, update, count, dedup, cleanup, findByHash, HISTORY_CAP };
+module.exports = { add, all, search, remove, update, count, dedup, cleanup, pruneExpired, findByHash, HISTORY_CAP, MAX_AGE_MS };

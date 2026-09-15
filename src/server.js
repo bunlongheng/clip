@@ -4,6 +4,7 @@ const cfg = require("./config");
 const { getLanIp } = require("./net");
 const { createApp } = require("./routes");
 const peer = require("./peer");
+const discover = require("./discover");
 const history = require("./history");
 
 const app = createApp();
@@ -20,7 +21,13 @@ function boot() {
     peer.log(`Peer: ${cfg.peer || "none"}`);
     peer.log(`UI: http://localhost:${cfg.port}`);
     setInterval(peer.poll, cfg.pollMs);
+    // History still has to age out while nothing is being copied.
+    if (db.MAX_AGE_MS) setInterval(() => db.pruneExpired(), 60000);
     peer.connectToPeer();
+    // Advertise either way so the other machine can find us; only adopt what we
+    // discover when no CLIP_PEER was pinned.
+    const d = discover.start(cfg, { onAdopt: peer.adoptPeer, onDrop: peer.dropPeer });
+    peer.setDiscoveryRelease(d.release);
   });
 }
 

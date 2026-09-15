@@ -54,6 +54,9 @@ module.exports = {
   // e.g. "192.168.1.50:4545" or "macmini.local:4545"
   peer: process.env.CLIP_PEER || "",
 
+  // An explicit CLIP_PEER pins the peer; Bonjour discovery must not override it.
+  peerLocked: !!process.env.CLIP_PEER,
+
   // Shared secret — must match on both machines. Auto-generated above if unset.
   token,
 

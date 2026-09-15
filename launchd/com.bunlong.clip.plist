@@ -15,8 +15,8 @@
     <dict>
         <key>CLIP_NAME</key>
         <string>MyMac</string>
-        <key>CLIP_PEER</key>
-        <string>192.168.1.50:4545</string>
+        <!-- No CLIP_PEER: the other machine is found automatically over Bonjour.
+             Set it only if mDNS is unavailable (different subnets, VPN). -->
         <!-- Leave CLIP_TOKEN unset to auto-generate one into .env on first run,
              or set it here to the SAME value used on the other machine. Never
              leave this as a hardcoded placeholder - config.js refuses to run

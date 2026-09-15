@@ -122,13 +122,13 @@ Open `http://localhost:4545/?token=<your CLIP_TOKEN>` once in your browser - tha
 
 ## Configuration
 
-All configuration is environment variables (see `src/config.js` and `.env.example`). None are strictly required to start - if `CLIP_TOKEN` is unset (or left as an old public default), Clip generates a strong random one and saves it to `.env` on first boot. You must set `CLIP_PEER` and the SAME `CLIP_TOKEN` on both machines for sync.
+All configuration is environment variables (see `src/config.js` and `.env.example`). None are strictly required to start - if `CLIP_TOKEN` is unset (or left as an old public default), Clip generates a strong random one and saves it to `.env` on first boot. Peers find each other automatically over Bonjour, so you do not set `CLIP_PEER` at all - just run Clip on both machines with the SAME `CLIP_TOKEN` and they connect. `CLIP_PEER` remains as a manual override for when mDNS is unavailable.
 
 | Env var | Default | Purpose |
 |---------|---------|---------|
 | `CLIP_NAME` | machine hostname | Label shown in the UI and stored as the clip source |
 | `CLIP_PORT` | `4545` | Port for the web UI and WebSocket server |
-| `CLIP_PEER` | (none) | The other machine as `ip:port`; empty means no sync, UI only |
+| `CLIP_PEER` | auto-discovered over Bonjour | Pins the other machine as `host:port`, overriding discovery. Leave unset unless mDNS is blocked |
 | `CLIP_TOKEN` | auto-generated into `.env` if unset | Shared secret gating the page, the HTTP API, and both WebSockets - copy the SAME value to both machines |
 | `CLIP_POLL_MS` | `400` | Clipboard poll interval in milliseconds |
 | `CLIP_MAX_BYTES` | `102400` | Max clip size synced (larger clips are kept locally, not sent) |
@@ -136,6 +136,21 @@ All configuration is environment variables (see `src/config.js` and `.env.exampl
 | `STICKIES_API_URL` | `http://localhost:4444` | Optional: base URL for the send-to-Stickies feature |
 
 `STICKIES_API_TOKEN` is not in this table on purpose - it is minted automatically by the send-to-Stickies flow on first use and persisted to `.env`; you never set it yourself. `CLIP_ENV_PATH` also exists (overrides where the `.env` file is read/written) but is a test-isolation knob, not something you need in normal use.
+
+### Peer discovery
+
+Each machine advertises itself as `_clip._tcp` over Bonjour (via the `dns-sd` binary
+that ships with macOS - no extra dependency) and adopts the first other Clip it sees.
+That means no IP or hostname to configure, and the link re-forms on its own after a
+DHCP lease change, a machine rename, a sleep/wake, or a reboot.
+
+Both machines see each other at the same instant, so the lexicographically smaller
+`CLIP_NAME` dials first and the other waits 3 seconds - by then it already has the
+incoming socket, so only one connection is ever opened. When a peer disappears from
+the network the adopted address is dropped and a different machine can be picked up.
+
+Discovery only works on a network that carries mDNS. Across subnets or over a VPN,
+set `CLIP_PEER` explicitly on both machines; an explicit value always wins.
 
 ## HTTP API
 
@@ -193,7 +208,7 @@ clip/
 
 ```bash
 # Edit launchd/com.bunlong.clip.plist: set the node path, the server.js path,
-# your CLIP_PEER, and the real log paths (launchd does not expand ~), then:
+# and the real log paths (launchd does not expand ~), then:
 cp launchd/com.bunlong.clip.plist ~/Library/LaunchAgents/
 launchctl load ~/Library/LaunchAgents/com.bunlong.clip.plist
 
